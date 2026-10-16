@@ -206,11 +206,3 @@ fn creating_after_the_branch_moved_is_refused_with_the_full_message() {
     );
     r.assert_untouched(&before);
 }
-
-#[test]
-fn commands_not_built_yet_say_so() {
-    let r = Repo::new();
-    let o = r.stone(&["adopt", "detached"]);
-    assert_eq!(o.code, 2);
-    assert!(o.stderr.contains("not implemented yet"));
-}

@@ -1,5 +1,6 @@
 //! One file per command, plus the pieces they share.
 
+pub mod adopt;
 pub mod commit;
 pub mod create;
 pub mod diff;
