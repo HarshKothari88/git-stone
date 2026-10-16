@@ -11,7 +11,7 @@ use std::process::exit;
 const HELP: &str = "\
 git stone - save task boundaries as you work, commit them later
 
-  git stone <name>                  create a stone
+  git stone <name> [-d <text>]      create a stone; -d says in detail what it is for
   git stone -- <name>               create, when the name looks like a command, a number, or starts with -
   git stone                         same as status
   git stone status [--porcelain]
@@ -56,6 +56,8 @@ enum Target {
 enum Command {
     Create {
         name: String,
+        /// Checked and trimmed by the create command, not here.
+        description: Option<String>,
         allow_empty: bool,
         force: bool,
     },
@@ -208,8 +210,10 @@ fn parse_id_first(number: &str, rest: &[String]) -> Result<Command, String> {
 /// Everything else is a new stone. Flags may sit anywhere before `--`; the name is one argument.
 fn parse_create(args: &[String]) -> Result<Command, String> {
     let (mut allow_empty, mut force, mut after_dashes) = (false, false, false);
+    let mut description: Option<String> = None;
     let mut names: Vec<&str> = Vec::new();
-    for arg in args {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
         if after_dashes {
             names.push(arg);
             continue;
@@ -218,6 +222,21 @@ fn parse_create(args: &[String]) -> Result<Command, String> {
             "--" => after_dashes = true,
             "--allow-empty" => allow_empty = true,
             "--force" => force = true,
+            "-d" | "--description" => {
+                // The value is taken as is, even if it starts with a dash.
+                let Some(text) = args.next() else {
+                    return Err(format!("`{arg}` needs the description text: git stone \"name\" -d \"what it is for\""));
+                };
+                if description.replace(text.clone()).is_some() {
+                    return Err("The description was given twice. Use one -d.".into());
+                }
+            }
+            s if s.starts_with("--description=") => {
+                let text = s["--description=".len()..].to_string();
+                if description.replace(text).is_some() {
+                    return Err("The description was given twice. Use one -d.".into());
+                }
+            }
             s if s.starts_with('-') => {
                 return Err(format!(
                     "Unknown option `{s}`. To create a stone whose name starts with a dash, use `git stone -- {s}`. See `git stone help`."
@@ -239,6 +258,7 @@ fn parse_create(args: &[String]) -> Result<Command, String> {
     match names.as_slice() {
         [name] => Ok(Command::Create {
             name: (*name).to_string(),
+            description,
             allow_empty,
             force,
         }),
@@ -341,6 +361,7 @@ mod tests {
     fn create(name: &str) -> Command {
         Command::Create {
             name: name.into(),
+            description: None,
             allow_empty: false,
             force: false,
         }
@@ -391,6 +412,7 @@ mod tests {
     fn create_flags_work_before_or_after_the_name() {
         let expected = Command::Create {
             name: "auth".into(),
+            description: None,
             allow_empty: true,
             force: true,
         };
@@ -399,6 +421,7 @@ mod tests {
             p(&["auth", "--force"]),
             Ok(Command::Create {
                 name: "auth".into(),
+                description: None,
                 allow_empty: false,
                 force: true,
             })
@@ -408,10 +431,64 @@ mod tests {
             p(&["--force", "--", "--allow-empty"]),
             Ok(Command::Create {
                 name: "--allow-empty".into(),
+                description: None,
                 allow_empty: false,
                 force: true,
             })
         );
+    }
+
+    fn create_with(name: &str, description: &str) -> Command {
+        Command::Create {
+            name: name.into(),
+            description: Some(description.into()),
+            allow_empty: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn description_flag() {
+        let want = create_with("auth", "Adds JWT login.\nCovers /login.");
+        let text = "Adds JWT login.\nCovers /login.";
+        assert_eq!(p(&["auth", "-d", text]), Ok(want));
+        assert_eq!(p(&["-d", text, "auth"]), Ok(create_with("auth", text)));
+        assert_eq!(
+            p(&["auth", "--description", text]),
+            Ok(create_with("auth", text))
+        );
+        assert_eq!(
+            p(&["auth", &format!("--description={text}")]),
+            Ok(create_with("auth", text))
+        );
+        // The value may start with a dash, or be empty (the create command decides what that means).
+        assert_eq!(p(&["auth", "-d", "-x"]), Ok(create_with("auth", "-x")));
+        assert_eq!(p(&["auth", "-d", ""]), Ok(create_with("auth", "")));
+        assert_eq!(p(&["auth", "--description="]), Ok(create_with("auth", "")));
+        // -d goes before `--`; after it, everything is the name.
+        assert_eq!(
+            p(&["-d", "why", "--", "-fix"]),
+            Ok(create_with("-fix", "why"))
+        );
+        assert!(p(&["--", "-fix", "-d", "why"]).is_err());
+    }
+
+    #[test]
+    fn description_flag_mistakes() {
+        assert!(p(&["auth", "-d"])
+            .unwrap_err()
+            .contains("needs the description"));
+        assert!(p(&["auth", "-d", "a", "-d", "b"])
+            .unwrap_err()
+            .contains("twice"));
+        assert!(p(&["auth", "-d", "a", "--description=b"])
+            .unwrap_err()
+            .contains("twice"));
+        // The description text is not mistaken for the name.
+        assert!(p(&["-d", "why"]).unwrap_err().contains("needs a name"));
+        assert!(p(&["auth", "-d", "why", "extra"])
+            .unwrap_err()
+            .contains("quotes"));
     }
 
     #[test]
