@@ -342,9 +342,39 @@ fn run() -> i32 {
             println!("git-stone {}", env!("CARGO_PKG_VERSION"));
             0
         }
+        other => match dispatch(&other) {
+            Ok(code) => code,
+            Err(e) => {
+                // Problems the user can fix are shown as they are; internal ones are marked.
+                if e.code == 1 {
+                    eprintln!("{}", e.message);
+                } else {
+                    eprintln!("git-stone: {}", e.message);
+                }
+                e.code
+            }
+        },
+    }
+}
+
+fn dispatch(command: &Command) -> cmd::CmdResult {
+    use cmd::{create, diff, list, review, show, status};
+    let repo = repo::Repo::discover()?;
+    match command {
+        Command::Create {
+            name,
+            description,
+            allow_empty,
+            force,
+        } => create::run(&repo, name, description.as_deref(), *allow_empty, *force),
+        Command::Status { porcelain } => status::run(&repo, *porcelain),
+        Command::List { porcelain } => list::run(&repo, *porcelain),
+        Command::Review => review::run(&repo),
+        Command::Diff { target, args } => diff::run(&repo, target, args),
+        Command::Show { id } => show::run(&repo, *id),
         other => {
             eprintln!("git-stone: `{}` is not implemented yet", other.name());
-            2
+            Ok(2)
         }
     }
 }
