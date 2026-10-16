@@ -1,0 +1,67 @@
+# Git Stone for AI coding agents
+
+Give your coding agent this once, in its memory file, and it will use `git stone` on its own. No skill file is needed.
+The block below is short on purpose, because memory files are read in every session.
+
+## Get the block
+
+```sh
+git stone agents            # prints the block for the installed version
+```
+
+## Where to paste it
+
+Paste the block into the file your tool reads. **Global** applies to every project, **project** only to one repository
+(commit it, and the whole team's agents follow it).
+
+| Tool | Global | Project |
+|---|---|---|
+| Claude Code | `~/.claude/CLAUDE.md` | `CLAUDE.md` |
+| Codex CLI | `~/.codex/AGENTS.md` | `AGENTS.md` |
+| Gemini CLI | `~/.gemini/GEMINI.md` | `GEMINI.md` |
+| Cursor | Settings → Rules → User Rules | `.cursor/rules/git-stone.mdc` (set `alwaysApply: true`) |
+| GitHub Copilot | | `.github/copilot-instructions.md` |
+| Windsurf | `~/.codeium/windsurf/memories/global_rules.md` | `.windsurf/rules/git-stone.md` |
+| Any tool that reads `AGENTS.md` | the tool's global file | `AGENTS.md` |
+
+Tools change these locations from time to time; check your tool's documentation if a path does not work.
+
+## The block
+
+````markdown
+## Git Stone (task boundaries)
+
+`git stone` is installed. Use it to save a boundary after each finished task, so the human can turn the
+work into atomic commits later. Never rewrite or delete code to make commits atomic.
+
+When to make a stone: after each finished logical task, tests passing, before starting the next one.
+How: `git stone "<short label>" -d "<what the task was, why, which files or routes it touches>"`.
+Always add `-d`: the human reads it later to understand the work. If the label looks like a command, a
+number, or starts with `-`, put `--` before it. No secrets in labels or descriptions.
+
+Workflow: do task -> `git stone "label" -d "details"` -> next task. At hand-over run `git stone review`
+and show it to the human. Check state with `git stone status --porcelain` or `git stone list --porcelain`
+(NUL-separated records, tab-separated fields; the first record is `git-stone-porcelain<TAB>1<TAB><command>`).
+
+Never, unless the human asks:
+- `git stone <id> drop` to undo code. It removes a boundary only; files stay as they are.
+- `git stone commit`, `commit-all`, `repair --apply`, `adopt`, `prune --apply`. Committing is the human's call.
+- `--force` or `--allow-empty` on a stone.
+- a plain `git commit` between stones (it moves the branch; stones then need `git stone repair`).
+If a command is refused (exit 1), read its message and tell the human. Do not work around it.
+Exit codes: 0 done, 1 refused with a reason, 2 failure (report it).
+````
+
+## Details the block leaves out
+
+An agent that needs more can read these on demand; they do not belong in always-loaded memory.
+
+- `git stone status --porcelain` adds records: `scope<TAB><ref|detached>`, `head<TAB><oid>`, `anchor<TAB><oid>` (different
+  means the branch moved), `change<TAB><code><TAB><path>`, and `warning<TAB><code><TAB><text>`. Warning codes:
+  `branch-moved`, `stones-already-committed`, `operation-in-progress`, `unmerged-paths`, `matches-branch-commit`,
+  `dirty-submodule`, `orphaned-chain`, `detached-chain`, `branch-in-two-worktrees`.
+- A `stone` record is `stone<TAB><id><TAB><created unix seconds><TAB><tree><TAB><name><TAB><description>`. The description
+  may contain tabs and newlines but never NUL, so split on NUL first, then on tab with at most 6 fields.
+- A stone is refused while a merge, rebase or cherry-pick is in progress, while files have conflicts, when nothing changed
+  since the previous stone, and when the branch moved since the stones were made.
+- What each normal Git action does to stones: [git-interactions.md](git-interactions.md).

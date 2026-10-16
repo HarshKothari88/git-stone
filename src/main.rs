@@ -29,10 +29,14 @@ git stone - save task boundaries as you work, commit them later
   git stone repair [--apply]
   git stone adopt <branch | detached>
   git stone prune [--apply] [--chain <ref>]       list (or remove) chains of deleted branches and worktrees
+  git stone agents                                print a block to paste into an AI agent's memory
   git stone help | version
 
 create flags: --allow-empty, --force
 ";
+
+/// The block for an AI agent's memory; the same text is shown in docs/ai-agents.md.
+const AGENT_MEMORY: &str = include_str!("../docs/agent-memory.md");
 
 /// Words that are commands, so they cannot start a stone name without `--`.
 const VERBS: &[&str] = &[
@@ -47,6 +51,7 @@ const VERBS: &[&str] = &[
     "repair",
     "adopt",
     "prune",
+    "agents",
     "help",
     "version",
 ];
@@ -104,6 +109,7 @@ enum Command {
         apply: bool,
         chain: Option<String>,
     },
+    Agents,
     Help,
     Version,
 }
@@ -166,6 +172,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
             ),
         },
         "prune" => parse_prune(rest),
+        "agents" => no_args("agents", rest).map(|()| Command::Agents),
         "help" => no_args("help", rest).map(|()| Command::Help),
         "version" => no_args("version", rest).map(|()| Command::Version),
         number if is_number(number) => parse_id_first(number, rest),
@@ -350,6 +357,10 @@ fn run() -> i32 {
             print!("{HELP}");
             0
         }
+        Command::Agents => {
+            print!("{AGENT_MEMORY}");
+            0
+        }
         Command::Version => {
             println!("git-stone {}", env!("CARGO_PKG_VERSION"));
             0
@@ -390,7 +401,9 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::Repair { apply } => repair::run(&repo, *apply),
         Command::Adopt { source } => adopt::run(&repo, source),
         Command::Prune { apply, chain } => prune::run(&repo, *apply, chain.as_deref()),
-        Command::Help | Command::Version => unreachable!("handled before dispatch"),
+        Command::Help | Command::Version | Command::Agents => {
+            unreachable!("handled before dispatch")
+        }
     }
 }
 
@@ -418,6 +431,17 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn agents_is_a_command_and_the_docs_show_the_same_block() {
+        assert_eq!(p(&["agents"]), Ok(Command::Agents));
+        assert!(p(&["agents", "x"]).is_err());
+        let docs = include_str!("../docs/ai-agents.md");
+        assert!(
+            docs.contains(AGENT_MEMORY),
+            "docs/ai-agents.md must show docs/agent-memory.md"
+        );
     }
 
     #[test]
