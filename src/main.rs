@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod chain;
+mod cmd;
 mod failpoint;
 mod git;
 mod repo;
