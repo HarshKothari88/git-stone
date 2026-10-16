@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Times git-stone on repositories of different sizes. Not run in CI.
 #
-#   cargo build --release && bench/bench.sh            # 1k, 10k and 50k files, then 1k + a 100 MB binary
+#   cargo build --release && bench/bench.sh            # 10, 1k, 5k and 20k files, then 1k + a 100 MB binary
 #   bench/bench.sh 1000 5000                           # your own sizes (file counts)
 #
 # Environment:
@@ -77,7 +77,8 @@ bench_repo() {
   local creates=()
   for i in $(seq "$STONES"); do
     for j in $(seq 0 9); do
-      f="d$(printf '%02d' $(((i * 10 + j) % 100)))/f$(((i * 10 + j) % files)).txt"
+      k=$(((i * 10 + j) % files))
+      f="d$(printf '%02d' $((k % 100)))/f$k.txt"
       echo "edit $i" >> "$f"
     done
     creates+=("$(timed git stone "stone $i")")
@@ -85,7 +86,7 @@ bench_repo() {
   local create_ms
   create_ms="$(printf '%s\n' "${creates[@]}" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}')"
   # Something to show as "current changes".
-  for j in 1 2 3; do echo "unstoned" >> "d0$j/f$j.txt"; done
+  for k in 1 2 3; do echo "unstoned" >> "d0$((k % 10))/f$k.txt"; done
 
   local base status list review diffc diffn
   base="$(median git status --porcelain)"
@@ -130,7 +131,7 @@ echo "git-stone: $("$GIT_STONE" version)   git: $(git --version)   runs: $RUNS  
 if [ "$#" -gt 0 ]; then
   for n in "$@"; do bench_repo "${n}f" "$n" 0; done
 else
-  for n in 1000 10000 50000; do bench_repo "${n}f" "$n" 0; done
+  for n in 10 1000 5000 20000; do bench_repo "${n}f" "$n" 0; done
   bench_repo "1000f+100MB" 1000 100
 fi
 [ "${KEEP:-0}" = 1 ] && echo && echo "kept: $work"
