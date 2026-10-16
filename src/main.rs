@@ -2,6 +2,7 @@
 // Remove this line once the commands land.
 #![allow(dead_code)]
 
+mod chain;
 mod failpoint;
 mod git;
 mod repo;
