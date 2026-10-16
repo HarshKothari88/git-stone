@@ -10,7 +10,9 @@ use crate::git::{Git, GitError};
 pub enum Scope {
     /// The full branch ref, e.g. `refs/heads/feature/auth`.
     Branch(String),
-    Detached,
+    /// The id of the worktree (see `worktree_id`). A shared ref per worktree, not `refs/worktree/*`:
+    /// `git gc` in another worktree does not treat that namespace as roots and would collect the chain.
+    Detached(String),
 }
 
 impl Scope {
@@ -20,7 +22,7 @@ impl Scope {
             Scope::Branch(full) => {
                 format!("refs/stones/{}", full.strip_prefix("refs/").unwrap_or(full))
             }
-            Scope::Detached => "refs/worktree/stones/detached".to_string(),
+            Scope::Detached(id) => format!("refs/stones/detached/{id}"),
         }
     }
 }
@@ -79,6 +81,8 @@ pub struct Repo {
     /// The real index of this worktree.
     pub index_path: PathBuf,
     pub scope: Scope,
+    /// Names this worktree in the refs of a detached chain.
+    pub worktree_id: String,
     /// `None` on an unborn branch.
     pub head: Option<String>,
     pub empty_tree: String,
@@ -115,12 +119,13 @@ impl Repo {
                 "--git-dir",
                 "--git-path",
                 "index",
+                "--git-common-dir",
             ])
             .map_err(|e| match e.code {
                 Some(128) => RepoError::NotARepo(e),
                 _ => RepoError::Git(e),
             })?;
-        let [bare, inside, git_dir, index_path] = lines(&out)?;
+        let [bare, inside, git_dir, index_path, common_dir] = lines(&out)?;
         if bare == "true" {
             return Err(RepoError::Bare);
         }
@@ -133,6 +138,7 @@ impl Repo {
         let repo_git = Git::new().in_dir(&top);
 
         // `symbolic-ref -q` exits 1 on a detached HEAD, and works on an unborn branch.
+        let worktree_id = worktree_id(git_dir, common_dir);
         let scope = match repo_git.run(["symbolic-ref", "-q", "HEAD"]) {
             Ok(out) => {
                 let branch = single(&out)?;
@@ -143,7 +149,7 @@ impl Repo {
                 }
                 Scope::Branch(branch)
             }
-            Err(e) if e.code == Some(1) => Scope::Detached,
+            Err(e) if e.code == Some(1) => Scope::Detached(worktree_id.clone()),
             Err(e) => return Err(e.into()),
         };
         // `--verify -q` exits 1 when HEAD has no commit yet.
@@ -161,6 +167,7 @@ impl Repo {
             git_dir: PathBuf::from(git_dir),
             index_path: PathBuf::from(index_path),
             scope,
+            worktree_id,
             head,
             empty_tree,
         })
@@ -197,6 +204,31 @@ impl Repo {
         // Runs at the top, because `ls-files` only looks below the current directory.
         Ok(!self.git().run(["ls-files", "-u", "-z"])?.is_empty())
     }
+}
+
+/// Names a worktree inside ref names: `main` for the main worktree, `linked/<name>` for a linked one
+/// (`<name>` is the directory under `.git/worktrees/`, with anything a ref name cannot hold written as `%XX`).
+fn worktree_id(git_dir: &str, common_dir: &str) -> String {
+    let same = |a: &str, b: &str| match (Path::new(a).canonicalize(), Path::new(b).canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    if same(git_dir, common_dir) {
+        return "main".to_string();
+    }
+    let name = Path::new(git_dir)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut id = String::from("linked/");
+    for byte in name.bytes() {
+        if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' {
+            id.push(byte as char);
+        } else {
+            id.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    id
 }
 
 /// Split git output into exactly `N` lines. Anything else is refused rather than guessed at.
@@ -257,10 +289,30 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn worktree_ids_are_safe_inside_ref_names() {
+        assert_eq!(worktree_id("/r/.git", "/r/.git"), "main");
+        assert_eq!(
+            worktree_id("/r/.git/worktrees/twin", "/r/.git"),
+            "linked/twin"
+        );
+        assert_eq!(
+            worktree_id("/r/.git/worktrees/my tree..lock~1", "/r/.git"),
+            "linked/my%20tree%2E%2Elock%7E1"
+        );
+        assert_eq!(
+            worktree_id("/r/.git/worktrees/\u{e9}", "/r/.git"),
+            "linked/%C3%A9"
+        );
+    }
+
+    #[test]
     fn state_ref_mirrors_the_branch_ref() {
         let nested = Scope::Branch("refs/heads/feature/auth".into());
         assert_eq!(nested.state_ref(), "refs/stones/heads/feature/auth");
-        assert_eq!(Scope::Detached.state_ref(), "refs/worktree/stones/detached");
+        assert_eq!(
+            Scope::Detached("main".into()).state_ref(),
+            "refs/stones/detached/main"
+        );
     }
 
     #[test]
@@ -297,7 +349,7 @@ mod tests {
         commit_file(&git, dir.path(), "a", "a");
         git.run(["checkout", "-q", "--detach"]).unwrap();
         let repo = Repo::discover_in(dir.path()).unwrap();
-        assert_eq!(repo.scope, Scope::Detached);
+        assert_eq!(repo.scope, Scope::Detached("main".into()));
         assert!(repo.head.is_some());
     }
 

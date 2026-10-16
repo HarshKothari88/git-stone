@@ -59,7 +59,7 @@ pub fn run(repo: &Repo, porcelain: bool) -> CmdResult {
             println!("Branch: {} (no commits yet)", scope_label(repo))
         }
         Scope::Branch(_) => println!("Branch: {}", scope_label(repo)),
-        Scope::Detached => println!(
+        Scope::Detached(_) => println!(
             "Detached HEAD at {} (stones stay with this worktree)",
             short(repo.head.as_deref().unwrap_or_default())
         ),
@@ -250,8 +250,11 @@ fn detached_chain_fits_here(repo: &Repo, state: Option<&State>) -> bool {
     if !matches!(repo.scope, Scope::Branch(_)) || state.is_some_and(|s| !s.stones.is_empty()) {
         return false;
     }
-    let Ok(Some((_, detached))) = State::load_ref(repo, &Scope::Detached.state_ref(), "detached")
-    else {
+    let Ok(Some((_, detached))) = State::load_ref(
+        repo,
+        &Scope::Detached(repo.worktree_id.clone()).state_ref(),
+        "detached",
+    ) else {
         return false;
     };
     !detached.stones.is_empty() && detached.anchor == repo.head

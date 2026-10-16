@@ -121,7 +121,7 @@ pub fn short(oid: &str) -> &str {
 pub fn scope_label(repo: &Repo) -> String {
     match &repo.scope {
         Scope::Branch(full) => full.strip_prefix("refs/heads/").unwrap_or(full).to_string(),
-        Scope::Detached => "detached HEAD".to_string(),
+        Scope::Detached(_) => "detached HEAD".to_string(),
     }
 }
 
@@ -146,7 +146,7 @@ fn moved_details(repo: &Repo, state: &State) -> String {
 fn place(repo: &Repo) -> String {
     match &repo.scope {
         Scope::Branch(_) => format!("branch `{}`", scope_label(repo)),
-        Scope::Detached => "HEAD".to_string(),
+        Scope::Detached(_) => "HEAD".to_string(),
     }
 }
 

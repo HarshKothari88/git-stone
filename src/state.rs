@@ -119,7 +119,7 @@ pub fn validate_description(text: &str) -> Result<Option<String>, String> {
 pub fn branch_field(scope: &Scope) -> &str {
     match scope {
         Scope::Branch(full) => full,
-        Scope::Detached => "detached",
+        Scope::Detached(_) => "detached",
     }
 }
 
@@ -859,7 +859,7 @@ mod tests {
             let mut state = State::new(
                 match &repo.scope {
                     Scope::Branch(b) => b.clone(),
-                    Scope::Detached => "detached".into(),
+                    Scope::Detached(_) => "detached".into(),
                 },
                 repo.head.clone(),
             );
@@ -965,12 +965,12 @@ mod tests {
         let fx = Fixture::born();
         fx.git.run(["checkout", "-q", "--detach"]).unwrap();
         let repo = fx.repo();
-        assert_eq!(repo.scope, Scope::Detached);
+        assert_eq!(repo.scope, Scope::Detached("main".into()));
         let state = fx.state_for(&repo, &[("auth", "one")]);
         state.save(&repo, None, "create 1").unwrap();
         assert!(fx
-            .out(&["for-each-ref", "refs/worktree/stones/"])
-            .contains("refs/worktree/stones/detached"));
+            .out(&["for-each-ref", "refs/stones/detached/"])
+            .contains("refs/stones/detached/main"));
         assert_eq!(State::load(&repo).unwrap().unwrap().1, state);
         // The branch's chain is separate.
         fx.git.run(["checkout", "-q", "main"]).unwrap();

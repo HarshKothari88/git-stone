@@ -73,7 +73,7 @@ pub fn run(repo: &Repo, source: &str) -> CmdResult {
 /// `detached`, a branch name, or a full `refs/heads/...` name (for a branch that is itself called `detached`).
 fn source_scope(repo: &Repo, source: &str) -> Result<Scope, CmdError> {
     if source == "detached" {
-        return Ok(Scope::Detached);
+        return Ok(Scope::Detached(repo.worktree_id.clone()));
     }
     let name = source.strip_prefix("refs/heads/").unwrap_or(source);
     let full = format!("refs/heads/{name}");
@@ -91,6 +91,6 @@ fn label(scope: &Scope) -> String {
             "branch `{}`",
             full.strip_prefix("refs/heads/").unwrap_or(full)
         ),
-        Scope::Detached => "detached HEAD".to_string(),
+        Scope::Detached(_) => "detached HEAD".to_string(),
     }
 }

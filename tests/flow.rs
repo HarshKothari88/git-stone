@@ -161,7 +161,7 @@ fn stones_on_a_detached_head_are_per_worktree() {
     r.git(&["checkout", "-q", "--detach"]);
     r.write("d.txt", "d\n");
     r.ok(&["on detached"]);
-    assert!(r.state_ref_exists("refs/worktree/stones/detached"));
+    assert!(r.state_ref_exists("refs/stones/detached/main"));
     assert_eq!(r.ok(&["list"]), "  1  on detached\n");
     let status = r.ok(&["status"]);
     assert!(status.starts_with("Detached HEAD at "), "{status}");

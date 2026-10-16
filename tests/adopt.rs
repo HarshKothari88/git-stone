@@ -25,8 +25,8 @@ fn detached_with_two_stones() -> Repo {
 fn detached_stones_follow_a_new_branch() {
     let r = detached_with_two_stones();
     let trees = [
-        oid(&r, "refs/worktree/stones/detached:trees/1"),
-        oid(&r, "refs/worktree/stones/detached:trees/2"),
+        oid(&r, "refs/stones/detached/main:trees/1"),
+        oid(&r, "refs/stones/detached/main:trees/2"),
     ];
     r.git(&["switch", "-q", "-c", "feat"]);
     let status = r.ok(&["status"]);
@@ -42,7 +42,7 @@ fn detached_stones_follow_a_new_branch() {
 
     // The chain is on the branch, the detached ref is gone, the trees are the same objects.
     assert!(exists(&r, "refs/stones/heads/feat"));
-    assert!(!exists(&r, "refs/worktree/stones/detached"));
+    assert!(!exists(&r, "refs/stones/detached/main"));
     assert_eq!(r.stone_tree("feat", 1), trees[0]);
     assert_eq!(r.stone_tree("feat", 2), trees[1]);
     let meta = r.git(&["cat-file", "-p", "refs/stones/heads/feat:meta"]);
@@ -109,8 +109,8 @@ fn ids_are_renumbered_when_the_target_used_them_before() {
     r.write("d2.txt", "2\n");
     r.ok(&["d-two"]);
     let trees = [
-        oid(&r, "refs/worktree/stones/detached:trees/1"),
-        oid(&r, "refs/worktree/stones/detached:trees/2"),
+        oid(&r, "refs/stones/detached/main:trees/1"),
+        oid(&r, "refs/stones/detached/main:trees/2"),
     ];
     r.git(&["switch", "-q", "-c", "feat"]);
     // The branch used ids 1 and 2 before and has none left now (next id is 3).
@@ -143,7 +143,7 @@ fn it_is_refused_when_the_target_has_stones() {
     r.write("mine.txt", "m\n");
     r.ok(&["mine"]);
     let (source, target) = (
-        oid(&r, "refs/worktree/stones/detached"),
+        oid(&r, "refs/stones/detached/main"),
         oid(&r, "refs/stones/heads/feat"),
     );
     let before = r.fingerprint();
@@ -155,7 +155,7 @@ fn it_is_refused_when_the_target_has_stones() {
         "{}",
         o.stderr
     );
-    assert_eq!(oid(&r, "refs/worktree/stones/detached"), source);
+    assert_eq!(oid(&r, "refs/stones/detached/main"), source);
     assert_eq!(oid(&r, "refs/stones/heads/feat"), target);
     r.assert_untouched(&before);
 }

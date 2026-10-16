@@ -444,7 +444,7 @@ fn detached_head_moves_and_the_chain_follows() {
     );
     assert_eq!(r.ok(&["list"]), "  2  b\n");
     assert!(r
-        .git(&["cat-file", "-p", "refs/worktree/stones/detached:meta"])
+        .git(&["cat-file", "-p", "refs/stones/detached/main:meta"])
         .contains(&format!("anchor {}", head(&r))));
     assert_eq!(r.stone(&["2", "commit", "-m", "again"]).code, 0);
 }
