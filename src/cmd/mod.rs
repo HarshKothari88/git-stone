@@ -1,10 +1,10 @@
 //! One file per command, plus the pieces they share.
 
 pub mod create;
-
+pub mod diff;
 pub mod list;
-
-
+pub mod review;
+pub mod show;
 pub mod status;
 
 use crate::git::GitError;
