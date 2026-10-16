@@ -82,6 +82,24 @@ impl Git {
         finish(&args, out)
     }
 
+    /// Like `run`, but some non-zero exits are answers, not failures (`merge-tree` exits 1 on a conflict).
+    /// Gives the exit code (0 or one of `answers`) with stdout; any other exit is an error.
+    pub fn run_answers<I, S>(&self, args: I, answers: &[i32]) -> Result<(i32, Vec<u8>)>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let args = collect(args);
+        let out = self
+            .command(&args)
+            .output()
+            .map_err(|e| spawn_error(&args, e))?;
+        match out.status.code() {
+            Some(code) if code == 0 || answers.contains(&code) => Ok((code, out.stdout)),
+            _ => finish(&args, out).map(|stdout| (0, stdout)),
+        }
+    }
+
     /// Like `run`, with `input` written to git's stdin.
     pub fn run_stdin<I, S>(&self, args: I, input: &[u8]) -> Result<Vec<u8>>
     where

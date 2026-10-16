@@ -334,10 +334,8 @@ impl State {
         Ok(Some((oid, state)))
     }
 
-    /// Write this state as a new state commit and move the ref to it, but only if the ref still
-    /// holds `old` (`None` = must not exist yet). Returns the new commit's oid.
-    /// A lost race is `StateError::Conflict`; nothing is changed then, and the objects we wrote are garbage for gc.
-    pub fn save(&self, repo: &Repo, old: Option<&str>, op: &str) -> Result<String, StateError> {
+    /// Write this state as a new state commit without pointing any ref at it. Returns the commit's oid.
+    fn write_commit(&self, repo: &Repo, message: &str) -> Result<String, StateError> {
         let git = repo.git();
         let meta = oid_of(git.run_stdin(
             ["hash-object", "-w", "--stdin"],
@@ -370,12 +368,11 @@ impl State {
         // The anchor is the only parent: it keeps the base commit reachable, and no link to the
         // previous state commit lets dropped stones be garbage collected (A3).
         // A fixed identity, so saving works even when the user has not set one.
-        let message = format!("git-stone: {op}");
         let mut args = vec!["commit-tree", &root];
         if let Some(anchor) = &self.anchor {
             args.extend(["-p", anchor]);
         }
-        args.extend(["-m", &message]);
+        args.extend(["-m", message]);
         let commit = oid_of(
             git.clone()
                 .with_env("GIT_AUTHOR_NAME", "git-stone")
@@ -384,7 +381,16 @@ impl State {
                 .with_env("GIT_COMMITTER_EMAIL", "git-stone@localhost")
                 .run(args)?,
         );
+        Ok(commit)
+    }
 
+    /// Write this state as a new state commit and move the ref to it, but only if the ref still
+    /// holds `old` (`None` = must not exist yet). Returns the new commit's oid.
+    /// A lost race is `StateError::Conflict`; nothing is changed then, and the objects we wrote are garbage for gc.
+    pub fn save(&self, repo: &Repo, old: Option<&str>, op: &str) -> Result<String, StateError> {
+        let message = format!("git-stone: {op}");
+        let commit = self.write_commit(repo, &message)?;
+        let git = repo.git();
         // The one write that matters. `--create-reflog`: git keeps no reflog for custom namespaces by default.
         let state_ref = repo.scope.state_ref();
         let zero = repo.zero_oid();
@@ -403,6 +409,50 @@ impl State {
                 Err(StateError::Conflict)
             } else {
                 Err(e.into())
+            };
+        }
+        Ok(commit)
+    }
+
+    /// Save this state under the current scope and remove the chain stored at `source_ref`, in one
+    /// `update-ref --stdin` transaction (A10b). A crash leaves the chain in one place or the other.
+    /// Both refs must still hold what the caller read (`old` for the current scope, `None` = absent).
+    pub fn save_moved(
+        &self,
+        repo: &Repo,
+        old: Option<&str>,
+        source_ref: &str,
+        source_old: &str,
+        op: &str,
+    ) -> Result<String, StateError> {
+        let message = format!("git-stone: {op}");
+        let commit = self.write_commit(repo, &message)?;
+        let state_ref = repo.scope.state_ref();
+        let zero = repo.zero_oid();
+        let script = format!(
+            "start\nupdate {state_ref} {commit} {}\ndelete {source_ref} {source_old}\nprepare\ncommit\n",
+            old.unwrap_or(&zero)
+        );
+        // `logAllRefUpdates=always`: git keeps no reflog for custom namespaces by default.
+        let git = repo.git();
+        let moved = git.run_stdin(
+            [
+                "-c",
+                "core.logAllRefUpdates=always",
+                "update-ref",
+                "-m",
+                &message,
+                "--stdin",
+            ],
+            script.as_bytes(),
+        );
+        if let Err(e) = moved {
+            let unchanged = read_ref(&git, &state_ref)?.as_deref() == old
+                && read_ref(&git, source_ref)?.as_deref() == Some(source_old);
+            return if unchanged {
+                Err(e.into())
+            } else {
+                Err(StateError::Conflict)
             };
         }
         Ok(commit)
@@ -948,6 +998,59 @@ mod tests {
         // "Must not exist yet" also loses when the ref exists.
         let create_again = first.save(&repo, None, "create 1");
         assert!(matches!(create_again, Err(StateError::Conflict)));
+    }
+
+    #[test]
+    fn save_moved_changes_both_refs_or_neither() {
+        let fx = Fixture::born();
+        let repo = fx.repo();
+        let state = fx.state_for(&repo, &[("auth", "one")]);
+        let source = state.save(&repo, None, "create 1").unwrap();
+        // Pretend the chain lives under another name and this scope has none.
+        fx.git
+            .run(["update-ref", "refs/stones/heads/old", &source])
+            .unwrap();
+        fx.git
+            .run(["update-ref", "-d", &repo.scope.state_ref()])
+            .unwrap();
+
+        // The source moved since it was read: nothing happens.
+        let stale = repo.head.clone().unwrap();
+        let lost = state.save_moved(&repo, None, "refs/stones/heads/old", &stale, "adopt 1");
+        assert!(matches!(lost, Err(StateError::Conflict)), "{lost:?}");
+        assert!(State::load(&repo).unwrap().is_none());
+        assert_eq!(
+            fx.out(&["rev-parse", "refs/stones/heads/old"]).trim(),
+            source
+        );
+
+        // The target appeared since it was read: nothing happens either.
+        let again = state.save(&repo, None, "create 1").unwrap();
+        let lost = state.save_moved(&repo, None, "refs/stones/heads/old", &source, "adopt 1");
+        assert!(matches!(lost, Err(StateError::Conflict)), "{lost:?}");
+        assert_eq!(State::load(&repo).unwrap().unwrap().0, again);
+        assert_eq!(
+            fx.out(&["rev-parse", "refs/stones/heads/old"]).trim(),
+            source
+        );
+
+        // Both as read: one commit moves the chain and keeps a reflog.
+        let moved = state
+            .save_moved(
+                &repo,
+                Some(&again),
+                "refs/stones/heads/old",
+                &source,
+                "adopt 1",
+            )
+            .unwrap();
+        assert_eq!(State::load(&repo).unwrap().unwrap().0, moved);
+        assert!(fx
+            .git
+            .run(["rev-parse", "-q", "--verify", "refs/stones/heads/old"])
+            .is_err());
+        let log = fx.out(&["reflog", "show", "--format=%gs", &repo.scope.state_ref()]);
+        assert_eq!(log, "git-stone: adopt 1\ngit-stone: create 1\n");
     }
 
     #[test]
