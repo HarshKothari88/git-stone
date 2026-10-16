@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::{load_state, moved_warning, scope_label, short, CmdResult};
-use crate::chain::{self, Change};
+use super::{load_state, moved_warning, movement_warning, scope_label, short, CmdResult};
+use crate::chain::{self, Change, Movement};
 use crate::repo::{Repo, Scope};
 use crate::snapshot;
 use crate::state::{self, State, Stone};
@@ -114,11 +114,20 @@ fn collect_warnings(
     current: &str,
 ) -> Result<Vec<Warning>, super::CmdError> {
     let mut out = Vec::new();
-    if let Some(state) = state.filter(|s| chain::moved(repo, s)) {
-        out.push(warning(
-            "branch-moved",
-            moved_warning(repo, state).replacen("Warning: ", "", 1),
-        ));
+    if let Some(state) = state {
+        match chain::classify(repo, state)? {
+            Movement::InSync => {}
+            Movement::Moved => out.push(warning(
+                "branch-moved",
+                moved_warning(repo, state).replacen("Warning: ", "", 1),
+            )),
+            Movement::Matches(_) => out.push(warning(
+                "stones-already-committed",
+                movement_warning(repo, state)?
+                    .unwrap_or_default()
+                    .replacen("Warning: ", "", 1),
+            )),
+        }
     }
     if let Some(op) = repo.op_in_progress()? {
         out.push(warning(

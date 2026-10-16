@@ -8,6 +8,7 @@ pub mod review;
 pub mod show;
 pub mod status;
 
+use crate::chain::{self, Movement, Outcome, SyncError};
 use crate::git::GitError;
 use crate::repo::{Repo, RepoError, Scope};
 use crate::snapshot::SnapshotError;
@@ -164,11 +165,63 @@ pub fn moved_warning(repo: &Repo, state: &State) -> String {
     )
 }
 
+/// What a read command says when HEAD is not where the stones were made, if anything.
+pub fn movement_warning(repo: &Repo, state: &State) -> Result<Option<String>, CmdError> {
+    Ok(match chain::classify(repo, state)? {
+        Movement::InSync => None,
+        Movement::Moved => Some(moved_warning(repo, state)),
+        Movement::Matches(count) => {
+            let ids: Vec<u64> = state.stones[..count].iter().map(|s| s.id).collect();
+            Some(format!(
+                "Warning: {} already on the branch as commits. The next git stone command that changes things marks them as committed.",
+                chain::describe_ids(&ids)
+            ))
+        }
+    })
+}
+
 /// Read commands never refuse because the branch moved. They say so on stderr and go on.
 pub fn warn_if_moved(repo: &Repo, state: Option<&State>) {
-    if let Some(state) = state.filter(|s| crate::chain::moved(repo, s)) {
-        eprintln!("{}", moved_warning(repo, state));
+    if let Some(state) = state {
+        if let Ok(Some(text)) = movement_warning(repo, state) {
+            eprintln!("{text}");
+        }
     }
+}
+
+/// For commands that change things: make sure HEAD is where the stones were made (A9).
+/// If the branch only holds commits that equal the first stones, they are marked as committed
+/// first. Returns the state commit and state to continue with, or refuses.
+pub fn sync_chain(repo: &Repo, oid: String, state: State) -> Result<(String, State), CmdError> {
+    match chain::sync(repo, &oid, &state) {
+        Ok(Outcome::Unchanged) => Ok((oid, state)),
+        Ok(Outcome::Reconciled(done)) => {
+            eprintln!("{}", done.note);
+            Ok((done.oid, done.state))
+        }
+        Ok(Outcome::Moved) => Err(CmdError::user(moved_refusal(repo, &state))),
+        Err(SyncError::Git(e)) => Err(e.into()),
+        Err(SyncError::State(e)) => Err(e.into()),
+        Err(SyncError::Index(e)) => Err(CmdError::user(format!(
+            "The first stones match commits already on the branch, but your staged changes clash with them, so nothing was changed.\nUnstage the clashing paths (`git restore --staged <path>`) and try again.\n{}",
+            e.stderr.trim_end()
+        ))),
+    }
+}
+
+/// A merge, rebase, ... in progress, or conflicted files, make it unsafe to record or commit anything.
+pub fn require_clean_start(repo: &Repo, action: &str) -> Result<(), CmdError> {
+    if let Some(op) = repo.op_in_progress()? {
+        return Err(CmdError::user(format!(
+            "A {op} is in progress. Finish or abort it before {action}."
+        )));
+    }
+    if repo.has_unmerged()? {
+        return Err(CmdError::user(format!(
+            "Some files have merge conflicts. Resolve them before {action}."
+        )));
+    }
+    Ok(())
 }
 
 /// Seconds since 1970 as `YYYY-MM-DD HH:MM:SS UTC`.

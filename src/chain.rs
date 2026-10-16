@@ -1,11 +1,10 @@
 //! Where a stone sits in its chain: its base, the latest tree, and tree-to-tree change lists.
 //!
-//! Phase 3 only knows "HEAD is the anchor or it is not". The full classification and
-//! auto-reconcile (A9) arrive in Phase 5.
+//! Also the branch-movement rules (A9): classify where HEAD is, and auto-reconcile the safe case.
 
 use crate::git::{Git, GitError};
 use crate::repo::Repo;
-use crate::state::State;
+use crate::state::{State, StateError};
 
 /// The tree of the anchor commit, or the empty tree on an unborn branch.
 pub fn anchor_tree(repo: &Repo, state: &State) -> Result<String, GitError> {
@@ -52,14 +51,163 @@ pub fn current_base(repo: &Repo, state: Option<&State>) -> Result<String, GitErr
     }
 }
 
-/// True when stones exist and the branch is no longer at the commit they were made on.
-pub fn moved(repo: &Repo, state: &State) -> bool {
-    !state.stones.is_empty() && repo.head != state.anchor
+/// Where HEAD stands compared with the commit the stones were made on (A9).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Movement {
+    /// Nothing to worry about (also: no stones, so nothing can be misattributed).
+    InSync,
+    /// HEAD only has commits that are exactly the first `n` stones, in order.
+    Matches(usize),
+    /// Anything else: an ordinary commit, pull, rebase, reset, amend, a recreated branch.
+    Moved,
 }
 
-/// Phase 5 will recognise commits that already match the first stones. Until then nothing is safe to reconcile.
-pub fn try_reconcile(_repo: &Repo, _state: &State) -> Result<bool, GitError> {
-    Ok(false)
+/// Cheap: when HEAD is the anchor it is one comparison, otherwise one ancestor check and one bounded `git log`.
+pub fn classify(repo: &Repo, state: &State) -> Result<Movement, GitError> {
+    if state.stones.is_empty() || repo.head == state.anchor {
+        return Ok(Movement::InSync);
+    }
+    let Some(head) = repo.head.as_deref() else {
+        return Ok(Movement::Moved);
+    };
+    let git = repo.git();
+    // An unborn anchor counts as an ancestor of everything.
+    let range = match &state.anchor {
+        Some(anchor) => {
+            match git.run(["merge-base", "--is-ancestor", anchor, head]) {
+                Ok(_) => {}
+                Err(e) if e.code == Some(1) => return Ok(Movement::Moved),
+                Err(e) => return Err(e),
+            }
+            format!("{anchor}..{head}")
+        }
+        None => head.to_string(),
+    };
+    // One more than the stones: if that many commits exist, they cannot all match.
+    let limit = (state.stones.len() + 1).to_string();
+    let log = git.run([
+        "log",
+        "--first-parent",
+        "--reverse",
+        "-z",
+        "-n",
+        &limit,
+        "--format=%H%x09%P%x09%T",
+        &range,
+    ])?;
+
+    let mut previous = state.anchor.clone();
+    let mut count = 0;
+    for record in log.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let text = String::from_utf8_lossy(record);
+        let mut fields = text.split('\t');
+        let (Some(oid), Some(parents), Some(tree)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return Ok(Movement::Moved);
+        };
+        // Each commit must sit directly on the one before it (the first on the anchor) and not be a merge.
+        let parents: Vec<&str> = parents.split(' ').filter(|p| !p.is_empty()).collect();
+        let expected: Vec<&str> = previous.as_deref().into_iter().collect();
+        let Some(stone) = state.stones.get(count) else {
+            return Ok(Movement::Moved);
+        };
+        if parents != expected || stone.tree != tree {
+            return Ok(Movement::Moved);
+        }
+        previous = Some(oid.to_string());
+        count += 1;
+    }
+    Ok(if count == 0 {
+        Movement::Moved
+    } else {
+        Movement::Matches(count)
+    })
+}
+
+pub enum SyncError {
+    Git(GitError),
+    /// The staged changes in the real index cannot be moved forward onto the commits.
+    Index(GitError),
+    State(StateError),
+}
+
+impl From<GitError> for SyncError {
+    fn from(e: GitError) -> SyncError {
+        SyncError::Git(e)
+    }
+}
+
+impl From<StateError> for SyncError {
+    fn from(e: StateError) -> SyncError {
+        SyncError::State(e)
+    }
+}
+
+pub struct Synced {
+    pub oid: String,
+    pub state: State,
+    /// For the user: which stones were found already committed.
+    pub note: String,
+}
+
+pub enum Outcome {
+    Unchanged,
+    Reconciled(Synced),
+    Moved,
+}
+
+/// Auto-reconcile (A9). When the branch only holds commits that equal the first stones, bring the
+/// real index forward one step per stone (`read-tree -m <prev> <next>`, safe to repeat) and record
+/// those stones as committed with one compare-and-swap. This also heals an interrupted commit.
+pub fn sync(repo: &Repo, oid: &str, state: &State) -> Result<Outcome, SyncError> {
+    let count = match classify(repo, state)? {
+        Movement::InSync => return Ok(Outcome::Unchanged),
+        Movement::Moved => return Ok(Outcome::Moved),
+        Movement::Matches(count) => count,
+    };
+    let git = repo.git().allow_optional_locks();
+    let mut previous = anchor_tree(repo, state)?;
+    for stone in &state.stones[..count] {
+        git.run(["read-tree", "-m", "-i", &previous, &stone.tree])
+            .map_err(SyncError::Index)?;
+        previous = stone.tree.clone();
+    }
+
+    let mut next = state.clone();
+    let done: Vec<u64> = next.stones.drain(..count).map(|s| s.id).collect();
+    next.anchor = repo.head.clone();
+    let note = format!(
+        "Note: {} match{} already on the branch; marked as committed.",
+        describe_ids(&done),
+        if done.len() == 1 {
+            "es a commit"
+        } else {
+            " commits"
+        }
+    );
+    let new_oid = next.save(repo, Some(oid), &format!("reconcile {}", done.len()))?;
+    Ok(Outcome::Reconciled(Synced {
+        oid: new_oid,
+        state: next,
+        note,
+    }))
+}
+
+/// `Stone 3`, `Stones 1–2`, or `Stones 1, 3` when some id in between is gone.
+pub fn describe_ids(ids: &[u64]) -> String {
+    match ids {
+        [one] => format!("Stone {one}"),
+        [first, .., last] if ids.windows(2).all(|w| w[1] == w[0] + 1) => {
+            format!("Stones {first}–{last}")
+        }
+        _ => format!(
+            "Stones {}",
+            ids.iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -217,6 +365,14 @@ mod tests {
                 ('D', "gone".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn id_lists_read_naturally() {
+        assert_eq!(describe_ids(&[3]), "Stone 3");
+        assert_eq!(describe_ids(&[1, 2]), "Stones 1–2");
+        assert_eq!(describe_ids(&[4, 5, 6]), "Stones 4–6");
+        assert_eq!(describe_ids(&[1, 3]), "Stones 1, 3");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{indented, load_state, moved_refusal, CmdError, CmdResult};
+use super::{indented, load_state, require_clean_start, sync_chain, CmdError, CmdResult};
 use crate::chain;
 use crate::failpoint::failpoint;
 use crate::repo::Repo;
@@ -24,18 +24,14 @@ pub fn run(
     };
 
     snapshot::clean_stale(repo);
-    if let Some(op) = repo.op_in_progress()? {
-        return Err(CmdError::user(format!(
-            "A {op} is in progress. Finish or abort it before making a stone."
-        )));
-    }
-    if repo.has_unmerged()? {
-        return Err(CmdError::user(
-            "Some files have merge conflicts. Resolve them before making a stone, or the conflict markers would be saved.",
-        ));
-    }
+    require_clean_start(repo, "making a stone")?;
 
     let (old, mut state) = match load_state(repo)? {
+        // Stones whose commits are already on the branch are marked committed first.
+        Some((oid, state)) if !state.stones.is_empty() => {
+            let (oid, state) = sync_chain(repo, oid, state)?;
+            (Some(oid), state)
+        }
         Some((oid, state)) => (Some(oid), state),
         None => (
             None,
@@ -48,8 +44,6 @@ pub fn run(
     if state.stones.is_empty() {
         // Nothing can be misattributed yet, so the chain starts wherever HEAD is now.
         state.anchor = repo.head.clone();
-    } else if repo.head != state.anchor && !chain::try_reconcile(repo, &state)? {
-        return Err(CmdError::user(moved_refusal(repo, &state)));
     }
 
     let tree = snapshot::snapshot(repo)?;
