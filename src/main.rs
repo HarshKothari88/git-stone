@@ -30,6 +30,7 @@ git stone - save task boundaries as you work, commit them later
   git stone adopt <branch | detached>
   git stone prune [--apply] [--chain <ref>]       list (or remove) chains of deleted branches and worktrees
   git stone agents                                print a block to paste into an AI agent's memory
+  git stone setup --agent <claude|codex|both> [--global]   add that block to CLAUDE.md / AGENTS.md for you
   git stone help | version
 
 create flags: --allow-empty, --force
@@ -52,6 +53,7 @@ const VERBS: &[&str] = &[
     "adopt",
     "prune",
     "agents",
+    "setup",
     "help",
     "version",
 ];
@@ -110,6 +112,11 @@ enum Command {
         chain: Option<String>,
     },
     Agents,
+    /// Adds the memory block to the agent's own file.
+    Setup {
+        agent: cmd::setup::Agent,
+        global: bool,
+    },
     Help,
     Version,
 }
@@ -173,11 +180,38 @@ fn parse(args: &[String]) -> Result<Command, String> {
         },
         "prune" => parse_prune(rest),
         "agents" => no_args("agents", rest).map(|()| Command::Agents),
+        "setup" => parse_setup(rest),
         "help" => no_args("help", rest).map(|()| Command::Help),
         "version" => no_args("version", rest).map(|()| Command::Version),
         number if is_number(number) => parse_id_first(number, rest),
         _ => parse_create(args),
     }
+}
+
+fn parse_setup(rest: &[String]) -> Result<Command, String> {
+    let (mut agent, mut global) = (None, false);
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--global" => global = true,
+            "--agent" => {
+                agent = Some(match args.next().map(String::as_str) {
+                    Some("claude") => cmd::setup::Agent::Claude,
+                    Some("codex") => cmd::setup::Agent::Codex,
+                    Some("both") => cmd::setup::Agent::Both,
+                    _ => return Err("--agent needs `claude`, `codex` or `both`.".into()),
+                })
+            }
+            other => {
+                return Err(format!(
+                    "`setup` does not take `{other}`. See `git stone help`."
+                ))
+            }
+        }
+    }
+    let agent = agent
+        .ok_or("setup needs --agent: git stone setup --agent <claude|codex|both> [--global]")?;
+    Ok(Command::Setup { agent, global })
 }
 
 fn parse_prune(rest: &[String]) -> Result<Command, String> {
@@ -361,22 +395,27 @@ fn run() -> i32 {
             print!("{AGENT_MEMORY}");
             0
         }
+        Command::Setup { agent, global } => report(cmd::setup::run(agent, global)),
         Command::Version => {
             println!("git-stone {}", env!("CARGO_PKG_VERSION"));
             0
         }
-        other => match dispatch(&other) {
-            Ok(code) => code,
-            Err(e) => {
-                // Problems the user can fix are shown as they are; internal ones are marked.
-                if e.code == 1 {
-                    eprintln!("{}", e.message);
-                } else {
-                    eprintln!("git-stone: {}", e.message);
-                }
-                e.code
+        other => report(dispatch(&other)),
+    }
+}
+
+/// Problems the user can fix are shown as they are; internal ones are marked.
+fn report(result: cmd::CmdResult) -> i32 {
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            if e.code == 1 {
+                eprintln!("{}", e.message);
+            } else {
+                eprintln!("git-stone: {}", e.message);
             }
-        },
+            e.code
+        }
     }
 }
 
@@ -401,7 +440,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::Repair { apply } => repair::run(&repo, *apply),
         Command::Adopt { source } => adopt::run(&repo, source),
         Command::Prune { apply, chain } => prune::run(&repo, *apply, chain.as_deref()),
-        Command::Help | Command::Version | Command::Agents => {
+        Command::Help | Command::Version | Command::Agents | Command::Setup { .. } => {
             unreachable!("handled before dispatch")
         }
     }

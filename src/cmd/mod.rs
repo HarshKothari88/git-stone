@@ -9,6 +9,7 @@ pub mod list;
 pub mod prune;
 pub mod repair;
 pub mod review;
+pub mod setup;
 pub mod show;
 pub mod status;
 
