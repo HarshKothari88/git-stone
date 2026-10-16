@@ -5,6 +5,7 @@ pub mod create;
 pub mod diff;
 pub mod drop;
 pub mod list;
+pub mod repair;
 pub mod review;
 pub mod show;
 pub mod status;
@@ -152,6 +153,15 @@ fn place(repo: &Repo) -> String {
 pub fn moved_refusal(repo: &Repo, state: &State) -> String {
     format!(
         "Git Stone: {} moved since the stones were made.\n{}\nNothing was changed. Run `git stone repair` to see how to fix this.",
+        place(repo),
+        moved_details(repo, state)
+    )
+}
+
+/// The first lines of the repair plan: what moved.
+pub fn describe_moved(repo: &Repo, state: &State) -> String {
+    format!(
+        "Git Stone: {} moved since the stones were made.\n{}",
         place(repo),
         moved_details(repo, state)
     )

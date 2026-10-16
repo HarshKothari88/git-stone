@@ -358,7 +358,7 @@ fn run() -> i32 {
 }
 
 fn dispatch(command: &Command) -> cmd::CmdResult {
-    use cmd::{commit, create, diff, drop, list, review, show, status};
+    use cmd::{commit, create, diff, drop, list, repair, review, show, status};
     let repo = repo::Repo::discover()?;
     match command {
         Command::Create {
@@ -375,6 +375,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::Drop { id } => drop::run(&repo, *id),
         Command::Commit { id, args } => commit::run(&repo, *id, args),
         Command::CommitAll { edit } => commit::run_all(&repo, *edit),
+        Command::Repair { apply } => repair::run(&repo, *apply),
         other => {
             eprintln!("git-stone: `{}` is not implemented yet", other.name());
             Ok(2)
