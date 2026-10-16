@@ -154,6 +154,31 @@ impl Repo {
         self.git_try(&["rev-parse", "-q", "--verify", name]).code == 0
     }
 
+    /// Every file in the working tree (not `.git`): path, mode, bytes.
+    pub fn files(&self) -> Vec<(String, u32, Vec<u8>)> {
+        let mut files = Vec::new();
+        walk(&self.dir, &self.dir, &mut files);
+        files.sort();
+        files
+    }
+
+    /// A Git hook; `body` is a POSIX shell script without the first line.
+    pub fn hook(&self, name: &str, body: &str) {
+        let path = self.dir.join(".git/hooks").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Anything the stones left in the git dir that should have been cleaned up.
+    pub fn temp_indexes(&self) -> Vec<String> {
+        fs::read_dir(self.dir.join(".git"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("stone-index-"))
+            .collect()
+    }
+
     pub fn fingerprint(&self) -> Fingerprint {
         let git_dir = self.dir.join(".git");
         let branch_oid = self
