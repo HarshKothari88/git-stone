@@ -2,6 +2,8 @@
 
 Save the boundary of each task while you work. Turn the boundaries into clean Git commits later.
 
+![Git Stone in a terminal: two stones, status, commit-all](docs/demo.gif)
+
 ```text
 $ git stone "add login" -d "Adds login(). Covers the /login route."
 Stone 1 created: add login
