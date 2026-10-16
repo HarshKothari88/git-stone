@@ -78,8 +78,6 @@ pub struct Repo {
     pub git_dir: PathBuf,
     /// The real index of this worktree.
     pub index_path: PathBuf,
-    /// `sha1` or `sha256`.
-    pub object_format: String,
     pub scope: Scope,
     /// `None` on an unborn branch.
     pub head: Option<String>,
@@ -117,13 +115,12 @@ impl Repo {
                 "--git-dir",
                 "--git-path",
                 "index",
-                "--show-object-format",
             ])
             .map_err(|e| match e.code {
                 Some(128) => RepoError::NotARepo(e),
                 _ => RepoError::Git(e),
             })?;
-        let [bare, inside, git_dir, index_path, object_format] = lines(&out)?;
+        let [bare, inside, git_dir, index_path] = lines(&out)?;
         if bare == "true" {
             return Err(RepoError::Bare);
         }
@@ -163,7 +160,6 @@ impl Repo {
             top: PathBuf::from(top),
             git_dir: PathBuf::from(git_dir),
             index_path: PathBuf::from(index_path),
-            object_format: object_format.to_string(),
             scope,
             head,
             empty_tree,
@@ -274,7 +270,7 @@ mod tests {
         let repo = Repo::discover_in(dir.path()).unwrap();
         assert_eq!(repo.scope, Scope::Branch("refs/heads/main".into()));
         assert_eq!(repo.head, None);
-        assert_eq!(repo.object_format, "sha1");
+        assert_eq!(repo.empty_tree.len(), 40);
         assert_eq!(repo.empty_tree, "4b825dc642cb6eb9a060e54bf8d69288fbee4904");
         let top = dir.path().canonicalize().unwrap();
         assert_eq!(repo.top, top);
@@ -312,7 +308,6 @@ mod tests {
             .run(["init", "-q", "-b", "main", "--object-format=sha256"])
             .unwrap();
         let repo = Repo::discover_in(dir.path()).unwrap();
-        assert_eq!(repo.object_format, "sha256");
         assert_eq!(repo.empty_tree.len(), 64);
     }
 

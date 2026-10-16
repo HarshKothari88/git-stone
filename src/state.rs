@@ -1146,7 +1146,7 @@ mod tests {
         commit_file(&git, dir.path(), "a", "a");
         let fx = Fixture { dir, git };
         let repo = fx.repo();
-        assert_eq!(repo.object_format, "sha256");
+        assert_eq!(repo.empty_tree.len(), 64);
         let state = fx.state_for(&repo, &[("auth", "one")]);
         assert_eq!(state.anchor.as_ref().unwrap().len(), 64);
         let oid = state.save(&repo, None, "create 1").unwrap();

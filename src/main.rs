@@ -1,6 +1,5 @@
 // Phase 0: commands are stubs, so most of git.rs, repo.rs and failpoint.rs is not called yet.
 // Remove this line once the commands land.
-#![allow(dead_code)]
 
 mod chain;
 mod cmd;
@@ -100,26 +99,6 @@ enum Command {
     },
     Help,
     Version,
-}
-
-impl Command {
-    fn name(&self) -> &'static str {
-        match self {
-            Command::Create { .. } => "create",
-            Command::Status { .. } => "status",
-            Command::List { .. } => "list",
-            Command::Review => "review",
-            Command::Diff { .. } => "diff",
-            Command::Show { .. } => "show",
-            Command::Commit { .. } => "commit",
-            Command::Drop { .. } => "drop",
-            Command::CommitAll { .. } => "commit-all",
-            Command::Repair { .. } => "repair",
-            Command::Adopt { .. } => "adopt",
-            Command::Help => "help",
-            Command::Version => "version",
-        }
-    }
 }
 
 /// Turn the arguments after `git stone` into a command. The error is the message for the user.
@@ -377,10 +356,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::CommitAll { edit } => commit::run_all(&repo, *edit),
         Command::Repair { apply } => repair::run(&repo, *apply),
         Command::Adopt { source } => adopt::run(&repo, source),
-        other => {
-            eprintln!("git-stone: `{}` is not implemented yet", other.name());
-            Ok(2)
-        }
+        Command::Help | Command::Version => unreachable!("handled before dispatch"),
     }
 }
 
