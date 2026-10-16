@@ -123,3 +123,60 @@ stops two snapshots in one process from sharing a file when they start in the sa
 - Known gap: a worktree whose directory was deleted by hand but not yet pruned with `git worktree prune` still counts as existing.
 
 Tests: `tests/prune.rs`.
+
+## Phase 8 findings (benchmarks)
+
+Run with `cargo build --release && bench/bench.sh` on an Apple M5 (10 cores), macOS, Git 2.53.0, one run, medians.
+Repositories: N files of about 1 KB in 100 directories. 100 stones, each after changing 10 files. `list`,
+`review` and the other reads are the median of 5 runs; `create` is the median of the 100 creates.
+
+| Command | 1k files | 10k files | 50k files | 1k + 100 MB binary | Target (50k files) |
+|---------|---------:|----------:|----------:|-------------------:|--------------------|
+| `git status` (baseline) | 8.8 ms | 17.3 ms | 54.5 ms | 8.7 ms | |
+| `create` | 122.9 ms | 121.9 ms | **206.7 ms** | 110.8 ms | within 2× of `git status` (**missed: 3.8×**) |
+| `status` | 102.0 ms | 120.6 ms | **183.6 ms** | 116.2 ms | within 2× of `git status` (**missed: 3.4×**) |
+| `list` | 31.3 ms | 31.9 ms | 31.5 ms | 35.4 ms | under 50 ms (met) |
+| `review` (100 stones) | 552.5 ms | 565.2 ms | 749.6 ms | 617.9 ms | under 2 s (met) |
+| `diff current` | 84.7 ms | 99.7 ms | 163.1 ms | 84.6 ms | |
+| `diff <middle stone>` | 35.8 ms | 36.1 ms | 36.9 ms | 36.2 ms | |
+| `drop` | 49.5 ms | 49.8 ms | 51.0 ms | 49.6 ms | |
+| `commit` | 118.2 ms | 242.9 ms → **123.1 ms** | 4361.8 ms → **232.6 ms** | 273.0 ms | no target (outlier, fixed below) |
+
+### Where the time goes (measured at 50k files)
+
+- **Fixed cost.** One `git` process costs about 4 ms here. `list` is about 8 of them (31 ms), `drop` about 12 (50 ms) and
+  `create`/`status` about 15 plus the snapshot. That is why `create` and `status` are 11–14× `git status` on a 1k-file
+  repo (a 9 ms baseline) but 3.4–3.8× on 50k files: the fixed part stops mattering as the repo grows.
+- **The snapshot.** `git add -A` on the temp index copy is 71 ms and `git write-tree` is 86 ms (the cache-tree is
+  rebuilt for the whole index), about 157 ms together against 54 ms for `git status`. This is the cause of the missed 2×.
+- **Large binary.** A 100 MB file that has not changed costs nothing (create 110.8 ms vs 122.9 ms at 1k files): the stat cache skips it.
+- **Review and list** scale with the number of stones and changed paths, not with repository size, as designed (A13).
+
+### Outlier: `commit` at 50k files took 4.4 s (fixed)
+
+`git commit` ran against a temp index made by `git read-tree <stone tree>`. That index holds no file stat data, so
+`git commit` re-hashed every file in the working tree (50k reads). Measured in the same repository:
+
+| Index given to `git commit --allow-empty` | Time |
+|---|---:|
+| fresh `git read-tree <tree>` (what A8 did) | 3953 ms |
+| the same with `--no-status` | 4433 ms |
+| a copy of the real index (has stat data) | 54 ms |
+
+**Fix:** the commit index is now a copy of the real index moved onto the stone with a single-tree merge,
+`git read-tree -m -i <stone tree>`. A single-tree merge makes the index equal to the tree (staged work that is not in
+the stone is dropped from this copy) but keeps the stat data of entries that already match. Before committing,
+`git write-tree` on that index must equal the stone's tree, or the command stops with nothing changed (I5).
+The user's own index is not touched by this step. After the fix: 50k files 232.6 ms (was 4361.8 ms), 10k files 123.1 ms (was 242.9 ms).
+
+Test: `staged_work_never_leaks_into_the_commit_and_stays_staged_after_it` (a staged new file, a staged deletion and an
+intent-to-add entry are absent from the commit and still staged afterwards), plus all existing commit tests.
+
+### Targets summary
+
+| Target | Result |
+|---|---|
+| `create` within 2× of `git status` at 50k files | missed, 3.8× |
+| `status` within 2× of `git status` at 50k files | missed, 3.4× |
+| `list` under 50 ms | met, 31.5 ms |
+| `review` with 100 stones under 2 s | met, 749.6 ms |
