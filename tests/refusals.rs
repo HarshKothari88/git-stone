@@ -210,7 +210,7 @@ fn creating_after_the_branch_moved_is_refused_with_the_full_message() {
 #[test]
 fn commands_not_built_yet_say_so() {
     let r = Repo::new();
-    let o = r.stone(&["drop", "1"]);
+    let o = r.stone(&["repair"]);
     assert_eq!(o.code, 2);
     assert!(o.stderr.contains("not implemented yet"));
 }

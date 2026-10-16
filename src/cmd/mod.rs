@@ -2,6 +2,7 @@
 
 pub mod create;
 pub mod diff;
+pub mod drop;
 pub mod list;
 pub mod review;
 pub mod show;
