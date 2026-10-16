@@ -125,6 +125,37 @@ fn staged_work_on_other_paths_survives_a_commit() {
     assert_eq!(r.git(&["show", "HEAD:a.txt"]), "a.txt\n");
 }
 
+/// The commit index starts as a copy of the real one (it keeps file stat data, which makes `git commit` fast),
+/// so anything staged must be gone from it: the commit holds exactly the stone (I5).
+#[test]
+fn staged_work_never_leaks_into_the_commit_and_stays_staged_after_it() {
+    let r = Repo::new();
+    r.write("a.txt", "a\n");
+    r.ok(&["one"]);
+    let stone = r.stone_tree("main", 1);
+    // Staged work the stone knows nothing about: a new file, a deletion, an intent-to-add entry.
+    r.write("staged_new.txt", "s\n");
+    r.git(&["add", "staged_new.txt"]);
+    r.git(&["rm", "-q", "--cached", "base.txt"]);
+    r.write("intent.txt", "i\n");
+    r.git(&["add", "-N", "intent.txt"]);
+    let staged_before = r.git(&["diff", "--cached", "--name-status"]);
+
+    let o = r.stone(&["1", "commit", "-m", "one"]);
+    assert_eq!(o.code, 0, "{}{}", o.stdout, o.stderr);
+    // Exactly the stone, nothing of the staged work.
+    assert_eq!(head_tree(&r), stone);
+    let committed = r.git(&["ls-tree", "-r", "--name-only", "HEAD"]);
+    assert!(!committed.contains("staged_new.txt") && !committed.contains("intent.txt"));
+    assert!(
+        committed.contains("base.txt"),
+        "the staged deletion must not leak: {committed}"
+    );
+    // And the user's staged work is exactly as it was, now measured against the new commit.
+    assert_eq!(r.git(&["diff", "--cached", "--name-status"]), staged_before);
+    r.git(&["fsck", "--no-dangling"]);
+}
+
 #[test]
 fn staged_work_that_clashes_is_refused_before_anything_changes() {
     let r = three();
