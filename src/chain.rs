@@ -210,6 +210,92 @@ pub fn describe_ids(ids: &[u64]) -> String {
     }
 }
 
+/// The oldest Git whose `merge-tree` has `--write-tree` together with `--merge-base` (6.1).
+pub const REPAIR_MIN_GIT: (u32, u32) = (2, 40);
+
+/// `git version 2.53.0` or `git version 2.39.5 (Apple Git-154)` -> (2, 39).
+fn parse_git_version(text: &str) -> Option<(u32, u32)> {
+    let version = text
+        .trim()
+        .strip_prefix("git version ")?
+        .split(' ')
+        .next()?;
+    let mut parts = version.split('.');
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
+}
+
+/// Checked only by `repair`, the one command that needs this Git.
+pub fn require_repair_git() -> Result<(), String> {
+    let out = Git::new()
+        .run(["version"])
+        .map_err(|e| format!("cannot run git: {e}"))?;
+    let text = String::from_utf8_lossy(&out);
+    match parse_git_version(&text) {
+        Some(found) if found >= REPAIR_MIN_GIT => Ok(()),
+        _ => Err(format!(
+            "`git stone repair` needs Git {}.{} or newer (found: {}).",
+            REPAIR_MIN_GIT.0,
+            REPAIR_MIN_GIT.1,
+            text.trim()
+        )),
+    }
+}
+
+/// What replaying the stones onto the current HEAD gives (A9).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Replay {
+    /// A new tree for every stone, in chain order.
+    Clean(Vec<String>),
+    /// The stone at this position cannot be put on top of HEAD. Later stones are not tried.
+    Conflict { index: usize, paths: Vec<String> },
+}
+
+/// Git's 3-way merge for each stone in turn: base = where the stone started, ours = where it
+/// would start now, theirs = the stone. Writes only objects; no ref, index or file changes.
+pub fn replay(repo: &Repo, state: &State) -> Result<Replay, GitError> {
+    let git = repo.git();
+    let mut old_base = anchor_tree(repo, state)?;
+    let mut new_base = head_tree(repo)?;
+    let mut trees = Vec::with_capacity(state.stones.len());
+    for (index, stone) in state.stones.iter().enumerate() {
+        let (code, out) = git.run_answers(
+            [
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "-z",
+                &format!("--merge-base={old_base}"),
+                &new_base,
+                &stone.tree,
+            ],
+            &[1],
+        )?;
+        let (tree, paths) = parse_merge_tree(&out);
+        if code == 1 {
+            return Ok(Replay::Conflict { index, paths });
+        }
+        old_base = stone.tree.clone();
+        new_base = tree.clone();
+        trees.push(tree);
+    }
+    Ok(Replay::Clean(trees))
+}
+
+/// `git merge-tree --write-tree --name-only -z`: `<tree>\0`, then on a conflict each conflicted
+/// path and an empty token, then informational messages that are not needed here.
+fn parse_merge_tree(out: &[u8]) -> (String, Vec<String>) {
+    let mut tokens = out.split(|b| *b == 0);
+    let tree = tokens
+        .next()
+        .map(|t| String::from_utf8_lossy(t).into_owned())
+        .unwrap_or_default();
+    let paths = tokens
+        .take_while(|t| !t.is_empty())
+        .map(|t| String::from_utf8_lossy(t).into_owned())
+        .collect();
+    (tree, paths)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct FileStat {
     /// `None` for a binary file.
@@ -323,6 +409,35 @@ pub fn count_added(git: &Git, a: &str, b: &str) -> Result<usize, GitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_tree_output_is_split_into_tree_and_conflicted_paths() {
+        assert_eq!(
+            parse_merge_tree(b"abc123\0"),
+            ("abc123".to_string(), vec![])
+        );
+        let conflict =
+            b"abc123\0src/a b.rs\0f\0\x001\0f\0CONFLICT (contents)\0Merge conflict in f\n\0";
+        assert_eq!(
+            parse_merge_tree(conflict),
+            ("abc123".to_string(), vec!["src/a b.rs".into(), "f".into()])
+        );
+    }
+
+    #[test]
+    fn git_versions_are_read_from_the_first_line() {
+        assert_eq!(parse_git_version("git version 2.53.0\n"), Some((2, 53)));
+        assert_eq!(
+            parse_git_version("git version 2.39.5 (Apple Git-154)\n"),
+            Some((2, 39))
+        );
+        assert_eq!(
+            parse_git_version("git version 2.40.0.windows.1"),
+            Some((2, 40))
+        );
+        assert_eq!(parse_git_version("something else"), None);
+        assert!(require_repair_git().is_ok());
+    }
 
     #[test]
     fn numstat_handles_plain_binary_and_renamed_files() {
