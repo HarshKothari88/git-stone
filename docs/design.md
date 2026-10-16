@@ -83,3 +83,30 @@ stops two snapshots in one process from sharing a file when they start in the sa
   replayed cannot be dropped either. Open question for the reviewer.
 - `repair` and `adopt` were not run on a SHA-256 repository; the state commit round trip is (Phase 1).
 - A crash inside the `adopt` transaction is not simulated; git's `prepare` step makes it all-or-nothing.
+
+## Phase 7 findings (interaction matrix)
+
+| # | Item | Finding | Test |
+|---|------|---------|------|
+| 1 | **A4 VERIFY: `refs/worktree/*` and `git gc` (FAILED, design changed)** | `refs/worktree/stones/detached` is per worktree, but `git gc` run in a *different* worktree does not treat it as a root. Once its reflog is gone the detached chain is collected and `git stone` reports `stone state is corrupt`. (Kept while the reflog lives, and when gc runs in the owning worktree.) Reproduced on Git 2.53.0. **Fix: a detached chain lives in a shared ref**: `refs/stones/detached/main` for the main worktree, `refs/stones/detached/linked/<name>` for a linked one (`<name>` = its directory under `.git/worktrees/`, with every character outside `A-Za-z0-9_-` written as `%XX`). Shared refs are gc roots for every worktree. | `a_detached_chain_survives_gc_run_in_another_worktree_after_reflog_expiry`, `a_detached_chain_survives_gc_in_its_own_worktree_and_with_reflogs`, `worktree_ids_are_safe_inside_ref_names` |
+| 2 | gc and dropped stones | After `drop`, the old state stays reachable through the reflog. Once the reflog is expired and `gc --prune=now` runs, the dropped stone's tree and `desc/` blob are gone and the live stone's tree stays. | `gc_collects_dropped_stones_but_keeps_live_ones` |
+| 3 | Test clock | The test fixture fixes `GIT_COMMITTER_DATE` in the past, so reflog entries look old and a plain `gc` would expire them. Tests that need the reflog to count pass `-c gc.reflogExpire=never`. | same |
+
+### Behaviour the tests pin down
+
+- `add`, `restore`, `stash` (`-u`, `pop`) never change the state ref; status recomputes.
+- Amend, reset, rebase, pull, merge, cherry-pick, am and a branch deleted and recreated elsewhere are all "moved": status warns, changes are refused, `list` still works, `repair --apply` fixes it.
+- A conflicted cherry-pick: `create`, `commit` and `commit-all` refuse; `status`, `list`, `show` and `drop` work. A stopped rebase (detached HEAD) refuses too, and the chain is back after `rebase --abort`.
+- `git reset --hard` plus `git clean`: the files are gone, `git checkout refs/stones/heads/<branch>:trees/<id> -- .` brings them back.
+- Linked worktrees never see each other's stones; one branch in two worktrees is a warning.
+- Failures: an unwritable object store gives exit 2, no state change, no temp index. An unwritable `refs/stones/heads` does the same for `create` and `drop`. A state ref pointing at an ordinary commit gives `stone state is corrupt` (exit 2) for every command and changes nothing. A temp index older than one hour is removed at the start of a changing command; a younger one is left alone.
+
+### Consequences of the shared detached ref
+
+- A worktree is told apart by its git dir, not its path. `git worktree remove` no longer deletes its detached chain; the chain stays under `refs/stones/detached/linked/<name>` until someone deletes that ref. Adding a worktree with the same name later finds the old chain; the usual movement rules (A9) then apply.
+- Chains made by an earlier build under `refs/worktree/stones/detached` are not read. Nothing was released, so there is no migration.
+
+### Known gaps
+
+- **Disk full is simulated with read-only directories, not a failpoint.** The plan asked for a failpoint. Git's own write errors take the same path (a failed `git` call, exit 2), and a read-only object store makes a real write fail, so the error handling that runs is the real one. A true full disk (a write that fails halfway through a file) is not reproduced.
+- `repair` with nothing to repair (in sync) exits 0 even during a merge; A11 says "repair refuses". It only refuses when there is something to change (`--apply` with a moved branch). Nothing can be lost either way.
