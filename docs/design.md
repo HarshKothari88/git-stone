@@ -41,3 +41,19 @@ stops two snapshots in one process from sharing a file when they start in the sa
 - `git mktree` checks that every referenced object exists, so a bad stone tree is caught at save time.
 - `git ls-tree` orders `trees/` entries as text (`1`, `10`, `2`), so the loader never relies on entry order.
 - Descriptions live in `desc/<id>` blobs. They are read in one `git cat-file --batch` call.
+
+## Phase 5 findings (commit, auto-reconcile)
+
+| # | Item | Finding | Test |
+|---|------|---------|------|
+| 1 | `read-tree -m <H0> <S>` from an unborn branch (A8) | Works with the empty tree as `<H0>`. The first commit is a root commit. | `unborn_branch_first_commit_is_a_root_commit` |
+| 2 | **`read-tree -m` needs `-i` (design change)** | Without `-i`, a two-tree merge checks the working tree. Entries that an earlier `read-tree -m` wrote have no file stamps, so a later merge that changes such an entry says `Entry 'x' not uptodate. Cannot merge.` This hits the main use: Stone 2 edits a file Stone 1 created, and the user has edited it further. With `-i` the working tree is never looked at (fitting: we never touch it), and real clashes between staged changes and the stone are still found (`would be overwritten by merge`). The plan's A8.2, A8.5 and A9 now use `read-tree -m -i`. | `a_stone_that_builds_on_an_earlier_stone_commits_cleanly`, `staged_work_that_clashes_is_refused_before_anything_changes` |
+| 3 | `git commit` against a temp `GIT_INDEX_FILE` | Hooks, signing, identity, editor, `-F` all work. `pre-commit` sees the temp index in `$GIT_INDEX_FILE`; a hook that runs `git add` changes the commit (we warn). | `a_hook_that_adds_files_gets_a_warning_and_the_chain_stays_consistent`, `signing_is_honoured` |
+| 4 | `git log --first-parent --reverse -n N` | `-n` is applied before `--reverse`: it keeps the newest N commits, oldest first. A window that does not start on the anchor fails the parent check, so a long history can never be mistaken for a match. | `other_movements_are_not_reconciled` |
+| 5 | `git commit` output | Git prints its own `[main abc1234] subject` summary on stdout before ours. | `commit_all_three_stones_in_order` |
+| 6 | Relative `-F file` | `git commit` runs in the user's own directory, so a relative path means what they expect (the rest of the tool runs at the top of the working tree). | `author_date_signoff_and_message_files_are_passed_to_git` |
+
+### Known gaps
+
+- A real `index.lock` taken by another process between our check and `read-tree` is not simulated; the failure path prints the exact `git read-tree -m -i <H0> HEAD` recovery command.
+- `git commit` of an empty stone (made with `--allow-empty`) fails with git's own "nothing to commit"; nothing is changed. Drop the stone or commit with a real change.
