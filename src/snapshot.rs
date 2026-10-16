@@ -106,12 +106,13 @@ pub fn snapshot(repo: &Repo) -> Result<String, SnapshotError> {
     Ok(String::from_utf8_lossy(&tree).trim().to_string())
 }
 
-/// Delete temp indexes that a killed process left behind (older than one hour). Best effort.
-pub fn clean_stale(repo: &Repo) {
+/// Temp indexes that a killed process left behind (older than one hour).
+pub fn stale_indexes(repo: &Repo) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(&repo.git_dir) else {
-        return;
+        return Vec::new();
     };
     let now = SystemTime::now();
+    let mut stale = Vec::new();
     for entry in entries.flatten() {
         if !entry.file_name().to_string_lossy().starts_with(PREFIX) {
             continue;
@@ -122,8 +123,16 @@ pub fn clean_stale(repo: &Repo) {
             .ok()
             .and_then(|modified| now.duration_since(modified).ok());
         if age.is_some_and(|age| age > STALE_AFTER) {
-            let _ = fs::remove_file(entry.path());
+            stale.push(entry.path());
         }
+    }
+    stale
+}
+
+/// Delete the stale temp indexes. Best effort.
+pub fn clean_stale(repo: &Repo) {
+    for path in stale_indexes(repo) {
+        let _ = fs::remove_file(path);
     }
 }
 

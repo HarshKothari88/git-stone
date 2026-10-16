@@ -220,15 +220,20 @@ fn worktree_id(git_dir: &str, common_dir: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut id = String::from("linked/");
+    format!("linked/{}", encode_worktree_name(&name))
+}
+
+/// A directory name under `.git/worktrees/` as it appears in a ref name.
+pub fn encode_worktree_name(name: &str) -> String {
+    let mut out = String::new();
     for byte in name.bytes() {
         if byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_' {
-            id.push(byte as char);
+            out.push(byte as char);
         } else {
-            id.push_str(&format!("%{byte:02X}"));
+            out.push_str(&format!("%{byte:02X}"));
         }
     }
-    id
+    out
 }
 
 /// Split git output into exactly `N` lines. Anything else is refused rather than guessed at.

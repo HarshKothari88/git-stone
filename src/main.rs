@@ -28,6 +28,7 @@ git stone - save task boundaries as you work, commit them later
   git stone commit-all [--edit]
   git stone repair [--apply]
   git stone adopt <branch | detached>
+  git stone prune [--apply] [--chain <ref>]       list (or remove) chains of deleted branches and worktrees
   git stone help | version
 
 create flags: --allow-empty, --force
@@ -45,6 +46,7 @@ const VERBS: &[&str] = &[
     "commit-all",
     "repair",
     "adopt",
+    "prune",
     "help",
     "version",
 ];
@@ -96,6 +98,11 @@ enum Command {
     /// A branch name, or the word `detached`.
     Adopt {
         source: String,
+    },
+    /// `chain` is a full state ref, named explicitly because it may still hold stones.
+    Prune {
+        apply: bool,
+        chain: Option<String>,
     },
     Help,
     Version,
@@ -158,11 +165,37 @@ fn parse(args: &[String]) -> Result<Command, String> {
                     .into(),
             ),
         },
+        "prune" => parse_prune(rest),
         "help" => no_args("help", rest).map(|()| Command::Help),
         "version" => no_args("version", rest).map(|()| Command::Version),
         number if is_number(number) => parse_id_first(number, rest),
         _ => parse_create(args),
     }
+}
+
+fn parse_prune(rest: &[String]) -> Result<Command, String> {
+    let (mut apply, mut chain) = (false, None);
+    let mut args = rest.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--apply" => apply = true,
+            "--chain" => {
+                match args.next() {
+                    Some(target) if chain.is_none() => chain = Some(target.clone()),
+                    _ => return Err(
+                        "prune takes one `--chain <ref>`, e.g. `--chain refs/stones/heads/old`."
+                            .into(),
+                    ),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "`prune` does not take `{other}`. See `git stone help`."
+                ))
+            }
+        }
+    }
+    Ok(Command::Prune { apply, chain })
 }
 
 /// `git stone <id> <verb> ...`
@@ -337,7 +370,7 @@ fn run() -> i32 {
 }
 
 fn dispatch(command: &Command) -> cmd::CmdResult {
-    use cmd::{adopt, commit, create, diff, drop, list, repair, review, show, status};
+    use cmd::{adopt, commit, create, diff, drop, list, prune, repair, review, show, status};
     let repo = repo::Repo::discover()?;
     match command {
         Command::Create {
@@ -356,6 +389,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::CommitAll { edit } => commit::run_all(&repo, *edit),
         Command::Repair { apply } => repair::run(&repo, *apply),
         Command::Adopt { source } => adopt::run(&repo, source),
+        Command::Prune { apply, chain } => prune::run(&repo, *apply, chain.as_deref()),
         Command::Help | Command::Version => unreachable!("handled before dispatch"),
     }
 }
@@ -384,6 +418,27 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn prune_takes_apply_and_one_chain() {
+        let prune = |apply, chain: Option<&str>| {
+            Ok(Command::Prune {
+                apply,
+                chain: chain.map(String::from),
+            })
+        };
+        assert_eq!(p(&["prune"]), prune(false, None));
+        assert_eq!(p(&["prune", "--apply"]), prune(true, None));
+        assert_eq!(
+            p(&["prune", "--chain", "refs/stones/heads/x", "--apply"]),
+            prune(true, Some("refs/stones/heads/x"))
+        );
+        assert!(p(&["prune", "--chain"]).is_err());
+        assert!(p(&["prune", "--chain", "a", "--chain", "b"]).is_err());
+        assert!(p(&["prune", "extra"]).is_err());
+        // A stone can still be named "prune" after `--`.
+        assert_eq!(p(&["--", "prune"]), Ok(create("prune")));
     }
 
     #[test]
