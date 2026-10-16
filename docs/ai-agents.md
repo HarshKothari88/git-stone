@@ -3,13 +3,30 @@
 Give your coding agent this once, in its memory file, and it will use `git stone` on its own. No skill file is needed.
 The block below is short on purpose, because memory files are read in every session.
 
-## Get the block
+## One command (Claude Code and Codex)
+
+```sh
+git stone setup --agent claude             # this project: CLAUDE.md at the top of the repository
+git stone setup --agent codex              # this project: AGENTS.md
+git stone setup --agent both --global      # every project: ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+```
+
+- Without `--global` it writes in the project you are in; with it, in the agent's own folder. (`CLAUDE_CONFIG_DIR` and
+  `CODEX_HOME` are honoured if set.)
+- **Your own instructions are never changed.** The block is added at the end of the file between two marker lines
+  (`<!-- git-stone:begin ... -->` and `<!-- git-stone:end -->`). A file that does not exist is created.
+- Running it again is safe: an up-to-date block changes nothing, and an older one is replaced in place, so rerun it after
+  upgrading Git Stone. To remove the block, delete the lines between and including the markers.
+- A symlinked `CLAUDE.md` or `AGENTS.md` stays a symlink. A file with a damaged marker is refused and nothing is changed.
+- The agent reads the file when it starts a new session.
+
+## For any other tool
 
 ```sh
 git stone agents            # prints the block for the installed version
 ```
 
-## Where to paste it
+## Where to paste it by hand
 
 Paste the block into the file your tool reads. **Global** applies to every project, **project** only to one repository
 (commit it, and the whole team's agents follow it).

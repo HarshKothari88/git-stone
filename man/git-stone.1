@@ -17,6 +17,7 @@ git-stone \- save task boundaries as you work, turn them into atomic commits lat
 \fBgit stone adopt\fR <branch|detached>
 \fBgit stone prune\fR [\fB\-\-apply\fR] [\fB\-\-chain\fR <ref>]
 \fBgit stone agents\fR
+\fBgit stone setup \-\-agent\fR <claude|codex|both> [\fB\-\-global\fR]
 \fBgit stone help\fR | \fBversion\fR
 .fi
 .SH DESCRIPTION
@@ -66,6 +67,11 @@ files. A chain that still holds stones is removed only when named with \fB\-\-ch
 .TP
 \fBagents\fR
 Print a block to paste into an AI agent's memory file.
+.TP
+\fBsetup \-\-agent\fR <claude|codex|both> [\fB\-\-global\fR]
+Add the same block to the agent's memory file (\fICLAUDE.md\fR or \fIAGENTS.md\fR) in this project, or with
+\fB\-\-global\fR in the agent's own folder. Existing text is kept; the block sits between marker lines and is
+refreshed in place when run again.
 .SH EXIT STATUS
 0 success; 1 refused, with a message that says why and nothing changed; 2 internal or Git failure.
 .SH FILES

@@ -80,8 +80,15 @@ This puts `git-stone` in `~/.local/bin` (set `PREFIX` to change that) together w
 [releases page](https://github.com/HarshKothari88/git-stone/releases) and put `git-stone.exe` on your `PATH`.
 Windows builds are not tested yet.
 
-**Let your AI agent use it:** `git stone agents` prints a short block to paste into an agent's memory
-(see [docs/ai-agents.md](docs/ai-agents.md)).
+**Let your AI agent use it** (Claude Code, Codex). One command adds a short, marked block to the agent's memory file and keeps
+everything else in it as it is:
+
+```sh
+git stone setup --agent claude            # this project: CLAUDE.md
+git stone setup --agent both --global     # every project: ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md
+```
+
+Details and other tools: [docs/ai-agents.md](docs/ai-agents.md).
 
 ## Two-minute walkthrough
 
@@ -186,6 +193,8 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 | `git stone repair [--apply]` | After the branch moved: show (or do) the replay of the stones onto the new HEAD. |
 | `git stone adopt <branch\|detached>` | Move a chain to the branch you are on (after a rename, or after `git switch -c`). |
 | `git stone prune [--apply] [--chain <ref>]` | List (or remove) chains of deleted branches and removed worktrees. |
+| `git stone setup --agent <claude\|codex\|both> [--global]` | Add the AI-agent block to `CLAUDE.md` / `AGENTS.md` (this project, or with `--global` your own agent folder). |
+| `git stone agents` | Print that block, to paste into any other tool. |
 
 `create` also takes `--allow-empty` and `--force`. `git stone <id> <verb>` and `git stone <verb> <id>` both work.
 
