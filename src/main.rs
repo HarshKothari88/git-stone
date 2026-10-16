@@ -5,6 +5,7 @@
 mod failpoint;
 mod git;
 mod repo;
+mod state;
 
 use std::process::exit;
 
