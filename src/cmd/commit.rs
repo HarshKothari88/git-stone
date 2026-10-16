@@ -107,9 +107,22 @@ pub fn run(repo: &Repo, id: u64, args: &[String]) -> CmdResult {
     // The commit itself, on a temporary index that holds exactly the stone.
     {
         let temp = TempIndex::create(repo)?;
-        repo.git()
-            .with_index(temp.path())
-            .run(["read-tree", &stone.tree])?;
+        // A copy of the real index moved onto the stone's tree. A single-tree merge makes the index equal to the
+        // tree (staged work that is not in the stone is gone from this copy) but keeps the file stat data of entries
+        // that already match. A plain `read-tree <tree>` drops all stat data, and `git commit` then re-hashes every
+        // file: 4.4 s instead of 0.1 s at 50k files (Phase 8 finding). `-i`: never look at the working tree.
+        let temp_git = repo.git().with_index(temp.path());
+        temp_git.run(["read-tree", "-m", "-i", &stone.tree])?;
+        // The commit must hold exactly the stone (I5). Refuse before committing if the index is anything else.
+        let held = temp_git.run(["write-tree"])?;
+        if String::from_utf8_lossy(&held).trim() != stone.tree {
+            return Err(CmdError {
+                code: 2,
+                message: format!(
+                    "internal error: the index prepared for Stone {id} does not equal the stone. Nothing was committed."
+                ),
+            });
+        }
         // Starts in the user's own directory (a relative `-F file` means what they think), on their terminal, with locks allowed.
         let mut args = vec!["commit".to_string()];
         args.extend(commit_args);
