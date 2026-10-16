@@ -1,182 +1,317 @@
-# Git Stone design notes
+# Design
 
-Part A of the plan is copied here in Phase 9. Until then this file holds the findings from every
-**VERIFY** item, checked on Git 2.53.0 (macOS). Each finding names the test that keeps it true.
+This document explains how Git Stone works and why it is built this way. For the exact on-disk layout and recovery
+recipes see [internals.md](internals.md). For what normal Git commands do to stones see
+[git-interactions.md](git-interactions.md).
 
-## Phase 2 findings (snapshot, A5)
+## Contents
 
-| # | Item | Finding | Test |
-|---|------|---------|------|
-| 1 | `git rev-parse --git-path index` honours a user-set `GIT_INDEX_FILE` | Yes. It prints the custom path (made absolute with `--path-format=absolute`, symlinks resolved). `Repo::index_path` therefore follows it, and the snapshot copies that file. | `git_index_file_is_what_git_path_reports` |
-| 2 | `git add -A` in a sparse checkout | Does not error and does not drop out-of-cone entries. The snapshot holds the out-of-cone files exactly as the index has them. Works with a full index and with `--sparse-index`. | `sparse_checkout_keeps_out_of_cone_entries`, `sparse_checkout_with_sparse_index` |
-| 3 | Split index | A temp copy placed in the worktree's git dir finds its `sharedindex.*` file. The tree equals the reference. | `split_index` |
-| 4 | Linked worktree | `Repo::git_dir` and `index_path` are per worktree. The temp index is created in that worktree's git dir; the main worktree's index is untouched. | `linked_worktree_uses_its_own_index` |
-| 5 | `post-index-change` hook | It fires on the temp index, and fires twice per snapshot (once for `add -A`, once for `write-tree`, which writes the cache-tree extension). `$GIT_INDEX_FILE` is the temp path. Harmless unless the hook assumes the real index. Document for users. | manual check (hook script writing a log) |
-| 6 | Embedded git repository (not a registered submodule) | `git add -A` succeeds with exit 0 and prints an `embedded git repository` warning on stderr. It is recorded as a gitlink. We capture stderr and show nothing on success. | manual check |
+1. [Purpose](#purpose)
+2. [The model](#the-model)
+3. [Invariants](#invariants)
+4. [Storage](#storage)
+5. [Snapshots](#snapshots)
+6. [Commands](#commands)
+7. [When the branch moves](#when-the-branch-moves)
+8. [Concurrency and crash safety](#concurrency-and-crash-safety)
+9. [Design decisions](#design-decisions)
+10. [Performance](#performance)
+11. [Limits](#limits)
+12. [Testing](#testing)
 
-### Behaviour the tests pin down (inherited from `git add -A`)
+## Purpose
 
-- Ignored files are absent from the snapshot.
-- Assume-unchanged and skip-worktree files keep the index version, even if the file on disk changed.
-- Staged and unstaged edits to one file: the working-tree version wins; the real index keeps the staged one.
-- A submodule is recorded at its checked-out commit; uncommitted files inside it are not captured.
-- CRLF is converted by `core.autocrlf=true` and by `.gitattributes` `text=auto`, exactly as `git add` would.
-- Intent-to-add entries become real entries in the snapshot.
-- File names with spaces, tab, newline, Unicode, a leading dash and shell syntax are stored exactly.
-- A held `index.lock` on the real index does not matter (the temp copy has its own lock file).
-- With no real index file (fresh repo), the snapshot works and does not create one.
-- A corrupt real index makes the snapshot fail (exit 2) and leaves the real index and the git dir as they were.
+A developer, or an AI agent, works through many tasks on one branch. Getting atomic commits out of that today means
+either committing after every task (which breaks the flow) or splitting everything at the end (slow by hand, and an
+agent often deletes and rewrites code just to make the pieces atomic).
 
-### Implementation note
+Git Stone records the boundary at the moment a task ends. Commits are made later, directly from the recorded
+snapshots, without rewriting any code.
 
-Temp index names are `stone-index-<pid>-<nanos>-<counter>`. The plan names `<pid>-<nanos>`; the counter
-stops two snapshots in one process from sharing a file when they start in the same nanosecond.
+Every choice below serves one goal: **making a boundary instant, safe, and possible from any state the repository is
+in.** Git Stone refuses only when going ahead could lose or misattribute work.
 
-## Phase 1 findings (state model)
+Non-goals: replacing branches, stashing, or version control of the stones themselves. Stones are local working notes,
+not shared history.
 
-- `git commit-tree` ignores `commit.gpgSign`, so saving a state commit never asks for a signature.
-  Test: `save_ignores_signing_config`.
-- State commits use a fixed author and committer (`git-stone <git-stone@localhost>`), so saving works
-  when the user has no identity configured.
-- `git mktree` checks that every referenced object exists, so a bad stone tree is caught at save time.
-- `git ls-tree` orders `trees/` entries as text (`1`, `10`, `2`), so the loader never relies on entry order.
-- Descriptions live in `desc/<id>` blobs. They are read in one `git cat-file --batch` call.
+## The model
 
-## Phase 5 findings (commit, auto-reconcile)
+```text
+branch (never moved by making a stone)
+refs/heads/feature/auth ──► H0 (the anchor)
 
-| # | Item | Finding | Test |
-|---|------|---------|------|
-| 1 | `read-tree -m <H0> <S>` from an unborn branch (A8) | Works with the empty tree as `<H0>`. The first commit is a root commit. | `unborn_branch_first_commit_is_a_root_commit` |
-| 2 | **`read-tree -m` needs `-i` (design change)** | Without `-i`, a two-tree merge checks the working tree. Entries that an earlier `read-tree -m` wrote have no file stamps, so a later merge that changes such an entry says `Entry 'x' not uptodate. Cannot merge.` This hits the main use: Stone 2 edits a file Stone 1 created, and the user has edited it further. With `-i` the working tree is never looked at (fitting: we never touch it), and real clashes between staged changes and the stone are still found (`would be overwritten by merge`). The plan's A8.2, A8.5 and A9 now use `read-tree -m -i`. | `a_stone_that_builds_on_an_earlier_stone_commits_cleanly`, `staged_work_that_clashes_is_refused_before_anything_changes` |
-| 3 | `git commit` against a temp `GIT_INDEX_FILE` | Hooks, signing, identity, editor, `-F` all work. `pre-commit` sees the temp index in `$GIT_INDEX_FILE`; a hook that runs `git add` changes the commit (we warn). | `a_hook_that_adds_files_gets_a_warning_and_the_chain_stays_consistent`, `signing_is_honoured` |
-| 4 | `git log --first-parent --reverse -n N` | `-n` is applied before `--reverse`: it keeps the newest N commits, oldest first. A window that does not start on the anchor fails the parent check, so a long history can never be mistaken for a match. | `other_movements_are_not_reconciled` |
-| 5 | `git commit` output | Git prints its own `[main abc1234] subject` summary on stdout before ours. | `commit_all_three_stones_in_order` |
-| 6 | Relative `-F file` | `git commit` runs in the user's own directory, so a relative path means what they expect (the rest of the tool runs at the top of the working tree). | `author_date_signoff_and_message_files_are_passed_to_git` |
+stone state (one ref per branch)
+refs/stones/heads/feature/auth ──► state commit
+                                     ├─ parent: H0
+                                     └─ tree
+                                         ├─ meta
+                                         ├─ trees/  1 ─► tree of the repository at the end of task 1
+                                         │          2 ─► tree ... task 2
+                                         └─ desc/   1 ─► description of Stone 1
+```
 
-### Known gaps
+- A **stone** is a snapshot of the whole working tree, stored as a Git *tree* object, with an id, a name and an
+  optional description.
+- The stones of one branch form a **chain**, ordered by creation. Stone *k* depends on the ones before it: its diff
+  runs from the previous stone (or, for the first stone, from the **anchor**: the branch commit the stones were made on).
+- The whole chain is one **state commit** behind **one ref**. Every change builds a new state commit and moves that ref
+  with a compare-and-swap.
 
-- A real `index.lock` taken by another process between our check and `read-tree` is not simulated; the failure path prints the exact `git read-tree -m -i <H0> HEAD` recovery command.
-- `git commit` of an empty stone (made with `--allow-empty`) fails with git's own "nothing to commit"; nothing is changed. Drop the stone or commit with a real change.
+Why one ref holds everything: a single ref update is atomic in Git, so a chain can never be half-updated and no
+multi-ref transaction is needed. A crash leaves the old state or the new one.
 
-## Phase 6 findings (repair, adopt)
+## Invariants
 
-| # | Item | Finding | Test |
-|---|------|---------|------|
-| 1 | `git merge-tree --write-tree --merge-base` (A9) | Needs Git 2.40 or newer. `repair` checks this (`git version`) and nothing else does. | `git_versions_are_read_from_the_first_line` |
-| 2 | Inputs | Plain **trees** work for the merge base and both sides. The plan's commit wrapping (`commit-tree`) is not needed, so no dangling commits are written. The empty tree works as the base (anchor `none`). | `an_anchor_of_none_uses_the_empty_tree_as_the_old_base` |
-| 3 | Exit codes | 0 clean, 1 conflict, 128 for a bad object. `Git::run_answers` treats 1 as an answer and anything else as a failure. | `a_conflicting_replay_changes_nothing_and_names_the_stone_and_paths` |
-| 4 | Output with `--name-only -z` | `<tree>\0`. On a conflict: each conflicted path, an empty token, then messages (ignored). The tree is written in both cases. | `merge_tree_output_is_split_into_tree_and_conflicted_paths` |
-| 5 | Moving a chain (A10b) | `update-ref --stdin` with `start`, `update`, `delete`, `prepare`, `commit` is one transaction. Both old values are checked, so a changed source or target fails the whole thing and nothing moves. A reflog for the new ref needs `-c core.logAllRefUpdates=always` (custom namespaces get none by default). Deleting the source also deletes its reflog. | `save_moved_changes_both_refs_or_neither`, `detached_stones_follow_a_new_branch` |
+These hold in every command and are checked by tests.
 
-### Behaviour the tests pin down
-
-- The plan (no `--apply`) writes only unreferenced objects; refs, index and files stay as they were.
-- After `repair --apply` every stone keeps its diff against the previous stone; only the base moves.
-- A stone that is partly committed by hand shrinks to the rest. A rebase with `--autostash` followed by repair
-  and commit does not revert the upstream change. A branch reset backwards keeps the stone's own work.
-- A replay conflict names the first stone that conflicts and its paths, and changes nothing.
-- `repair --apply` is refused while a merge or rebase runs, or when the branch has no commits. The plan still works.
-
-### Known gaps
-
-- **A conflicting replay is a dead end.** `drop` refuses when the branch moved (A9), so a stone that cannot be
-  replayed cannot be dropped either. Open question for the reviewer.
-- `repair` and `adopt` were not run on a SHA-256 repository; the state commit round trip is (Phase 1).
-- A crash inside the `adopt` transaction is not simulated; git's `prepare` step makes it all-or-nothing.
-
-## Phase 7 findings (interaction matrix)
-
-| # | Item | Finding | Test |
-|---|------|---------|------|
-| 1 | **A4 VERIFY: `refs/worktree/*` and `git gc` (FAILED, design changed)** | `refs/worktree/stones/detached` is per worktree, but `git gc` run in a *different* worktree does not treat it as a root. Once its reflog is gone the detached chain is collected and `git stone` reports `stone state is corrupt`. (Kept while the reflog lives, and when gc runs in the owning worktree.) Reproduced on Git 2.53.0. **Fix: a detached chain lives in a shared ref**: `refs/stones/detached/main` for the main worktree, `refs/stones/detached/linked/<name>` for a linked one (`<name>` = its directory under `.git/worktrees/`, with every character outside `A-Za-z0-9_-` written as `%XX`). Shared refs are gc roots for every worktree. | `a_detached_chain_survives_gc_run_in_another_worktree_after_reflog_expiry`, `a_detached_chain_survives_gc_in_its_own_worktree_and_with_reflogs`, `worktree_ids_are_safe_inside_ref_names` |
-| 2 | gc and dropped stones | After `drop`, the old state stays reachable through the reflog. Once the reflog is expired and `gc --prune=now` runs, the dropped stone's tree and `desc/` blob are gone and the live stone's tree stays. | `gc_collects_dropped_stones_but_keeps_live_ones` |
-| 3 | Test clock | The test fixture fixes `GIT_COMMITTER_DATE` in the past, so reflog entries look old and a plain `gc` would expire them. Tests that need the reflog to count pass `-c gc.reflogExpire=never`. | same |
-
-### Behaviour the tests pin down
-
-- `add`, `restore`, `stash` (`-u`, `pop`) never change the state ref; status recomputes.
-- Amend, reset, rebase, pull, merge, cherry-pick, am and a branch deleted and recreated elsewhere are all "moved": status warns, changes are refused, `list` still works, `repair --apply` fixes it.
-- A conflicted cherry-pick: `create`, `commit` and `commit-all` refuse; `status`, `list`, `show` and `drop` work. A stopped rebase (detached HEAD) refuses too, and the chain is back after `rebase --abort`.
-- `git reset --hard` plus `git clean`: the files are gone, `git checkout refs/stones/heads/<branch>:trees/<id> -- .` brings them back.
-- Linked worktrees never see each other's stones; one branch in two worktrees is a warning.
-- Failures: an unwritable object store gives exit 2, no state change, no temp index. An unwritable `refs/stones/heads` does the same for `create` and `drop`. A state ref pointing at an ordinary commit gives `stone state is corrupt` (exit 2) for every command and changes nothing. A temp index older than one hour is removed at the start of a changing command; a younger one is left alone.
-
-### Consequences of the shared detached ref
-
-- A worktree is told apart by its git dir, not its path. `git worktree remove` no longer deletes its detached chain; the chain stays under `refs/stones/detached/linked/<name>` until someone deletes that ref. Adding a worktree with the same name later finds the old chain; the usual movement rules (A9) then apply.
-- Chains made by an earlier build under `refs/worktree/stones/detached` are not read. Nothing was released, so there is no migration.
-
-### Known gaps
-
-- **Disk full is simulated with read-only directories, not a failpoint.** The plan asked for a failpoint. Git's own write errors take the same path (a failed `git` call, exit 2), and a read-only object store makes a real write fail, so the error handling that runs is the real one. A true full disk (a write that fails halfway through a file) is not reproduced.
-- `repair` with nothing to repair (in sync) exits 0 even during a merge; A11 says "repair refuses". It only refuses when there is something to change (`--apply` with a moved branch). Nothing can be lost either way.
-
-## Prune (added after Phase 7)
-
-`git stone prune [--apply] [--chain <ref>]` cleans up what nothing can reach any more.
-
-- **Leftover** = a `refs/stones/heads/<b>` whose branch `refs/heads/<b>` is gone, or a `refs/stones/detached/linked/<name>` whose directory under `<common dir>/worktrees/` is gone. The chain of the current scope and `refs/stones/detached/main` are never leftovers.
-- Without `--chain`, `--apply` removes only leftovers with **no stones**, plus temp indexes older than one hour. Chains that still hold stones (or cannot be read) are listed, with the exact `--chain` command and, for branches, the `adopt` hint. `--chain` takes the full ref, because a branch can be called `linked/x`.
-- Each removal is `update-ref -d <ref> <old>`, so a chain that changed meanwhile is not deleted.
-- **Deleting a ref also deletes its reflog**, so the old state cannot be found through the reflog. The command prints `git update-ref <ref> <oid>` for every removed chain; that works until `git gc` prunes the unreachable commit (two weeks by default).
-- Empty chains of branches that still exist are left alone: removing them would restart ids at 1 (I7).
-- Known gap: a worktree whose directory was deleted by hand but not yet pruned with `git worktree prune` still counts as existing.
-
-Tests: `tests/prune.rs`.
-
-## Phase 8 findings (benchmarks)
-
-Run with `cargo build --release && bench/bench.sh` on an Apple M5 (10 cores), macOS, Git 2.53.0, one run, medians.
-Repositories: N files of about 1 KB in 100 directories. 100 stones, each after changing 10 files. `list`,
-`review` and the other reads are the median of 5 runs; `create` is the median of the 100 creates.
-
-| Command | 1k files | 10k files | 50k files | 1k + 100 MB binary | Target (50k files) |
-|---------|---------:|----------:|----------:|-------------------:|--------------------|
-| `git status` (baseline) | 8.8 ms | 17.3 ms | 54.5 ms | 8.7 ms | |
-| `create` | 122.9 ms | 121.9 ms | **206.7 ms** | 110.8 ms | within 2× of `git status` (**missed: 3.8×**) |
-| `status` | 102.0 ms | 120.6 ms | **183.6 ms** | 116.2 ms | within 2× of `git status` (**missed: 3.4×**) |
-| `list` | 31.3 ms | 31.9 ms | 31.5 ms | 35.4 ms | under 50 ms (met) |
-| `review` (100 stones) | 552.5 ms | 565.2 ms | 749.6 ms | 617.9 ms | under 2 s (met) |
-| `diff current` | 84.7 ms | 99.7 ms | 163.1 ms | 84.6 ms | |
-| `diff <middle stone>` | 35.8 ms | 36.1 ms | 36.9 ms | 36.2 ms | |
-| `drop` | 49.5 ms | 49.8 ms | 51.0 ms | 49.6 ms | |
-| `commit` | 118.2 ms | 242.9 ms → **123.1 ms** | 4361.8 ms → **232.6 ms** | 273.0 ms | no target (outlier, fixed below) |
-
-### Where the time goes (measured at 50k files)
-
-- **Fixed cost.** One `git` process costs about 4 ms here. `list` is about 8 of them (31 ms), `drop` about 12 (50 ms) and
-  `create`/`status` about 15 plus the snapshot. That is why `create` and `status` are 11–14× `git status` on a 1k-file
-  repo (a 9 ms baseline) but 3.4–3.8× on 50k files: the fixed part stops mattering as the repo grows.
-- **The snapshot.** `git add -A` on the temp index copy is 71 ms and `git write-tree` is 86 ms (the cache-tree is
-  rebuilt for the whole index), about 157 ms together against 54 ms for `git status`. This is the cause of the missed 2×.
-- **Large binary.** A 100 MB file that has not changed costs nothing (create 110.8 ms vs 122.9 ms at 1k files): the stat cache skips it.
-- **Review and list** scale with the number of stones and changed paths, not with repository size, as designed (A13).
-
-### Outlier: `commit` at 50k files took 4.4 s (fixed)
-
-`git commit` ran against a temp index made by `git read-tree <stone tree>`. That index holds no file stat data, so
-`git commit` re-hashed every file in the working tree (50k reads). Measured in the same repository:
-
-| Index given to `git commit --allow-empty` | Time |
-|---|---:|
-| fresh `git read-tree <tree>` (what A8 did) | 3953 ms |
-| the same with `--no-status` | 4433 ms |
-| a copy of the real index (has stat data) | 54 ms |
-
-**Fix:** the commit index is now a copy of the real index moved onto the stone with a single-tree merge,
-`git read-tree -m -i <stone tree>`. A single-tree merge makes the index equal to the tree (staged work that is not in
-the stone is dropped from this copy) but keeps the stat data of entries that already match. Before committing,
-`git write-tree` on that index must equal the stone's tree, or the command stops with nothing changed (I5).
-The user's own index is not touched by this step. After the fix: 50k files 232.6 ms (was 4361.8 ms), 10k files 123.1 ms (was 242.9 ms).
-
-Test: `staged_work_never_leaks_into_the_commit_and_stays_staged_after_it` (a staged new file, a staged deletion and an
-intent-to-add entry are absent from the commit and still staged afterwards), plus all existing commit tests.
-
-### Targets summary
-
-| Target | Result |
+| | Invariant |
 |---|---|
-| `create` within 2× of `git status` at 50k files | missed, 3.8× |
-| `status` within 2× of `git status` at 50k files | missed, 3.4× |
-| `list` under 50 ms | met, 31.5 ms |
-| `review` with 100 stones under 2 s | met, 749.6 ms |
+| I1 | Making, listing, diffing or dropping a stone never changes the branch ref, the working tree or the real index, byte for byte. |
+| I2 | A stone's tree never changes after it is made. Only `repair --apply`, run on purpose, writes new trees, and it says so. |
+| I3 | The diff of stone *k* runs from the tree of the previous surviving stone (the anchor's tree for the first) to the tree of *k*. |
+| I4 | Dropping removes a boundary only. No file changes; the next stone's diff grows to cover the dropped one. |
+| I5 | Only the first surviving stone can be committed, and the commit's tree equals that stone's tree exactly. |
+| I6 | Every stone in a chain was made while `HEAD` was the anchor. If the branch moved, commands that change stones refuse (except the one provably safe case below). |
+| I7 | Ids go up and are never reused within a chain, even when the chain becomes empty. |
+| I8 | Every Git call is an argument list, never a shell string. Only `-z` or fixed machine formats are parsed. |
+| I9 | A chain belongs to the place it started: one branch, or the detached HEAD of one worktree. Switching away and back never loses stones, because they live in refs. |
+
+## Storage
+
+**A stone is a tree, not a commit.** Diffs are tree-to-tree and commits are made later from the tree, so a tree is all
+that is needed. It is one concept fewer.
+
+**State commit.** Its tree holds `meta` (chain order, names, ids, anchor), `trees/<id>` (the snapshots) and an optional
+`desc/<id>` per described stone. Its only parent is the anchor commit, which keeps the anchor reachable even if the
+branch is rebased or reset. Repair needs it for a three-way merge.
+
+**No link between state versions.** If each state commit had the previous one as parent, dropped stones could never be
+garbage collected. History lives in the ref's reflog instead, which expires normally. A dropped stone is recoverable
+until then, and removable by `git gc` after.
+
+**Reading is strict.** A wrong header, a stone without a snapshot or the reverse, ids out of order, or a branch that does
+not match the ref it was read from give `stone state is corrupt` (exit 2). Nothing is guessed.
+
+**Names and descriptions** come from untrusted input. A name is one line of at most 200 bytes with no control characters;
+everything else is allowed, including Unicode, `$`, `;` and a leading `-`. A description is up to 10 000 bytes of text, may
+span lines, and never contains NUL. It is stored as its own blob because it can be long and `meta` has one record per line.
+Descriptions are shown with terminal control characters removed. Both are immutable once made. The description is not used as
+a commit message: a stone commit uses `-m` or the stone name.
+
+**Refs.** `refs/stones/heads/<branch>` mirrors `refs/heads/<branch>`. Git never allows `a` and `a/b` as branches together,
+so the mirrored names cannot clash either. Every write creates the reflog explicitly, because Git keeps none for custom
+namespaces by default.
+
+**Object formats.** SHA-1 and SHA-256 are supported. Id lengths, the empty tree and the "ref must not exist" zero id are
+derived from the repository.
+
+## Snapshots
+
+A snapshot must equal what `git add -A && git write-tree` would give, without touching the real index:
+
+1. Copy the real index to a temporary file inside the worktree's git directory (same filesystem, and a split index still
+   finds its shared files).
+2. Run `git add -A` and `git write-tree` against the copy.
+3. Delete the copy, also on error.
+
+Because Git does the work, `.gitignore`, attributes, clean filters (CRLF, LFS), file modes, symlinks, deletions, new files
+and submodule pointers all behave as in a normal `git add`. The copy keeps the file stat cache, so only changed files are
+hashed. Sparse checkouts, split indexes, linked worktrees and a user-set `GIT_INDEX_FILE` were all verified to work.
+
+All Git calls set `GIT_OPTIONAL_LOCKS=0`, so a read command never refreshes the real index behind the user's back. The
+only exceptions are the steps of `commit` that write the real index on purpose.
+
+## Commands
+
+### Making a stone
+
+`git stone "name" [-d "details"]`
+
+Refuses when: the name or description is invalid; a merge, rebase, cherry-pick, revert or bisect is in progress; files
+have merge conflicts (a stone would store conflict markers); the branch moved; nothing changed since the previous stone
+(`--allow-empty` overrides); or stones exist and the working tree equals the branch commit, which usually means a stash
+(`--force` overrides). It warns, without refusing, when the stone adds over 1000 new paths, which usually means a missing
+`.gitignore` entry.
+
+Any `HEAD` is fine: a branch, a detached HEAD, or a branch with no commits yet (the anchor is then `none`). With no stones
+in the chain, the anchor is simply moved to the current `HEAD`, since nothing can be misattributed.
+
+### Reading
+
+`status`, `list`, `diff`, `show` and `review` never refuse because the branch moved: tree-to-tree diffs stay true. They
+print a warning. `diff` hands its output and extra arguments straight to `git diff`, so the user's pager and colours apply.
+`review` costs one `git diff-tree --numstat` per stone, which scales with changed paths, not with repository size.
+
+`status --porcelain` and `list --porcelain` give versioned, tab-separated, NUL-terminated records for scripts and agents
+(see [ai-agents.md](ai-agents.md)).
+
+### Committing a stone
+
+`git stone 1 commit -m "feat: add auth"` runs a real `git commit` against a temporary index rather than building a commit
+with `git commit-tree`. That gives hooks, signing, identity, templates, the editor and trailers for free; re-implementing
+them would be fragile.
+
+Let *H0* be the anchor (equal to `HEAD`) and *S* the stone's tree.
+
+1. Refuse during a merge or conflicts, if the stone is not the first, or if `index.lock` exists (the real index is
+   updated after the commit, so a lock would strand it).
+2. **Dry run.** On a copy of the real index, run `git read-tree -m -i H0 S`. A clash between the user's staged changes and
+   the stone fails here, before anything changes.
+3. **Commit.** Make a temporary index from a copy of the real index moved onto *S* with `git read-tree -m -i S`, check that
+   `git write-tree` on it equals *S*, then run `git commit` on it with the user's terminal attached. Allowed options are
+   `-m`, `-F`, `-e`, `--no-verify`, `-S`, `--author`, `--date`, `-s`.
+4. Check that `HEAD`'s parent is *H0*; otherwise another process moved the branch, so stop and explain.
+5. **Real index.** Run `git read-tree -m -i H0 HEAD`. This moves the user's index forward and is idempotent.
+6. If `HEAD^{tree}` differs from *S*, a hook changed the commit. Warn and list the paths; the next stone's base becomes the
+   real `HEAD` tree.
+7. Remove the stone from the chain, set the anchor to `HEAD`, and save with a compare-and-swap.
+
+An unborn branch works with the empty tree as *H0*, and the first commit is a root commit.
+
+`commit-all [--edit]` repeats this for every stone in order, using the stone name as the message. It stops at the first
+failure; commits already made stay made and recorded.
+
+### Dropping
+
+Removes the stone from the chain and keeps `next-id`. Only the state ref changes, so it works during a merge or rebase.
+Like every command that changes stones, it refuses when the branch moved.
+
+### Adopting
+
+`git stone adopt <branch|detached>` moves a chain to the current scope after a branch rename or after `git switch -c` from
+a detached HEAD. The tool never moves chains by itself, because it cannot know the intent. The source must have stones and
+the target none. Ids are kept when they cannot collide with ids the target already used; otherwise they are renumbered and
+the mapping is printed. Both refs change in one `update-ref --stdin` transaction, so a failure leaves the chain in one place
+or the other, never lost.
+
+### Pruning
+
+`git stone prune [--apply] [--chain <ref>]` finds chains nothing can reach any more: the branch was deleted, or the linked
+worktree was removed. Without `--chain`, only empty chains and stale temporary indexes are removed. A chain that still holds
+stones is listed and removed only when named. Empty chains of branches that still exist are left alone, because removing
+them would restart ids at 1 (I7). Each removal deletes the ref only if it still holds the listed value, and the command
+prints the `update-ref` that restores it (deleting a ref also deletes its reflog).
+
+## When the branch moves
+
+Every command that has stones compares `HEAD` with the anchor.
+
+| Situation | Meaning | Action |
+|---|---|---|
+| `HEAD` equals the anchor | normal | proceed |
+| The first-parent commits from the anchor to `HEAD` have trees equal to stones 1..*k*, in order, each directly on the previous | the stones were committed (by us, interrupted, or by hand) | **reconcile**: move the real index forward, drop those stones, set the anchor, one compare-and-swap |
+| Anything else (ordinary commit, pull, rebase, reset, amend, recreated branch) | the branch moved | reading warns; changing refuses |
+
+Reconcile is limited to a first-parent walk of at most *stones + 1* commits, so a long history can never be mistaken for a
+match, and any mismatch means "moved". It is also how an interrupted `git stone commit` heals itself.
+
+### Repair
+
+`git stone repair` replays the stones onto the new `HEAD` using Git's three-way merge:
+
+```text
+old_base = tree(anchor)        new_base = tree(HEAD)
+for each stone S in order:
+    merged   = merge-tree(base = old_base, ours = new_base, theirs = S)
+    old_base = S               new_base = merged
+```
+
+Without `--apply` it only runs the merges (which write objects, nothing referenced) and prints the plan. With `--apply` it
+saves the merged trees as new snapshots with the same ids, names, descriptions and times, and moves the anchor to `HEAD`.
+The old state stays in the ref's reflog. Any conflict changes nothing and names the first conflicting stone and its paths.
+
+Why this is right in every case: a commit of part of the work makes that part "already there" for the merge, so the stone
+shrinks to the rest; a rebase onto new upstream work gives the stones the upstream changes, so committing them never reverts
+upstream; a reset backwards keeps the stones' content on the older base. Only `repair` ever writes new trees (I2).
+
+## Concurrency and crash safety
+
+- The only mutable thing is the state ref. Every change is *read the old oid, write objects, compare-and-swap*. Two
+  processes at once: one wins, the other is told to run again. States are never merged.
+- Objects written before a failed swap are unreachable garbage for `git gc`. Git Stone never deletes objects.
+- Temporary indexes are deleted by a guard, also on error. After a hard kill they remain; commands that change stones remove
+  any older than one hour, and `prune` lists them.
+- There is no moment where a kill leaves a half state, except the window in `commit` between the Git commit and the state
+  update. That window self-heals through reconcile.
+- Failure points for tests: setting `GIT_STONE_FAILPOINT` to `create:before-cas`, `drop:before-cas`, `repair:before-cas`,
+  `commit:after-git-commit` or `commit:after-index-update` makes the process exit with code 99 at that point.
+
+Exit codes: 0 done, 1 refused (the message says why, nothing changed), 2 internal or Git failure.
+
+## Design decisions
+
+What was chosen, what else was possible, and why.
+
+| Decision | Alternative | Reason |
+|---|---|---|
+| A stone is a tree. | A commit per stone. | Trees are all a diff or a later commit needs. |
+| All stones of a branch in one state commit behind one ref. | One ref per stone. | One ref update is atomic; per-stone refs need multi-ref transactions and can be left inconsistent by a crash. |
+| No link from a state commit to the previous one. | Parent chain of states. | A chain would keep dropped stones reachable forever. The reflog keeps recoverable history and expires. |
+| Snapshot with `git add -A` on a copy of the index. | Walk the working tree ourselves. | Git already applies ignore rules, filters, modes and submodules, and the copy keeps its stat cache. |
+| Commit with `git commit` on a temporary index. | `git commit-tree`. | Hooks, signing, identity, templates and the editor come for free. |
+| The commit's index is a copy of the real one moved onto the stone with a single-tree merge, checked to equal the stone. | `git read-tree <stone>` into an empty index. | A fresh index has no file stat data, so `git commit` re-hashes every file: seconds on a large repository instead of milliseconds. The copy keeps the stat data and the check keeps the commit exact. |
+| Every `read-tree -m` uses `-i`. | Plain `read-tree -m`. | Without `-i`, a two-tree merge also compares index entries with files on disk. Entries written by an earlier `read-tree` carry no file stamps, so editing a file after committing the stone before it fails with "not uptodate". Git Stone never touches the working tree, so it asks Git not to look at it. Real clashes with staged changes are still found. |
+| Repair uses `git merge-tree --write-tree` on trees directly. | Wrapping the trees in commits first. | `merge-tree` accepts trees for the merge base and both sides, and the empty tree works as a base. No temporary commits are written. Needs Git 2.40 or newer, checked only by `repair`. |
+| Detached chains live in `refs/stones/detached/...`, one shared ref per worktree. | `refs/worktree/...`, which is per worktree by design. | `git gc` run in a different worktree does not treat another worktree's `refs/worktree/*` as roots, so a detached chain whose reflog had expired was collected. Shared refs are roots for every worktree. |
+| A moved branch blocks changes; `repair` is explicit. | Silently rebase stones. | A snapshot rebased without the user knowing could revert upstream work or attribute it wrongly. |
+| Descriptions are separate immutable blobs. | A line in `meta`. | They are long, multi-line and untrusted. |
+| `adopt` is explicit. | Follow branch renames automatically. | The tool cannot know whether a missing branch was renamed or deleted. |
+| Dropping never touches files. | Dropping reverts code. | A boundary is only a label. Reverting code is the user's job. |
+| No runtime dependencies; only the `git` binary, with argument lists. | libgit2 or a Rust Git library. | Git itself is the reference for every behaviour above, and one small static binary is easy to install and audit. |
+
+## Performance
+
+Cost is dominated by starting `git` processes (about 4 ms each) plus, for a stone, one `git add -A` on a copy of the index.
+Measured on an Apple M5 laptop, macOS, Git 2.53.0, with 100 stones of 10 changed files each, medians (`bench/bench.sh`):
+
+| Repository size | 10 files | 1 000 files | 5 000 files | 20 000 files |
+|---|---:|---:|---:|---:|
+| `git status` (for comparison) | 4.7 ms | 8.3 ms | 12.4 ms | 26.5 ms |
+| make a stone | 77.0 ms | 119.8 ms | 127.1 ms | 143.7 ms |
+| `status` | 57.9 ms | 96.9 ms | 125.2 ms | 135.8 ms |
+| `list` | 32.8 ms | 32.3 ms | 38.1 ms | 32.0 ms |
+| `review` (100 stones) | 497.4 ms | 575.0 ms | 595.7 ms | 607.7 ms |
+| `diff current` | 43.4 ms | 85.2 ms | 103.6 ms | 116.9 ms |
+| `drop` | 52.0 ms | 52.3 ms | 49.6 ms | 51.2 ms |
+| `commit` | 85.8 ms | 118.3 ms | 165.9 ms | 155.4 ms |
+
+- `list` reads one ref and one blob. `drop` and `list` do not depend on the repository size at all.
+- `review` scales with the number of stones and changed paths, never with the number of files in the repository.
+- Making a stone and `status` grow with the file count the way `git status` does, but with a constant of about 15 process
+  starts on top, which dominates small repositories.
+- A 100 MB binary that has not changed adds nothing, because the stat cache skips it (1 000 files plus one such file: 108 ms to
+  make a stone).
+
+## Limits
+
+- **Stones are local.** `git push` and `git clone` do not transfer them (`git push --mirror` would).
+- **What a snapshot contains is what `git add -A` stages.** Ignored files are absent; assume-unchanged and skip-worktree
+  files keep their index version; a submodule is recorded at its checked-out commit and uncommitted changes inside it are
+  not captured (`status` warns); renames are not stored, diffs detect them.
+- **The `post-index-change` hook** can fire on the temporary index. Hooks that assume it is the real index should check
+  `GIT_INDEX_FILE`.
+- **A conflicting repair leaves no way to keep that chain.** `drop` refuses on a moved branch, so a stone that cannot be
+  replayed cannot be dropped either. Move the branch back to the anchor (the stones are then usable again), or discard the
+  chain with `git update-ref -d refs/stones/heads/<branch>`.
+- **A removed worktree's detached chain stays** under `refs/stones/detached/linked/<name>` until pruned.
+- **A conflicting `index.lock`** taken by another process in the instant between the lock check and the index update in
+  `commit` leaves the commit made and the index behind; the error prints the exact `git read-tree -m -i <H0> HEAD` to finish,
+  and the next command also heals it.
+- **Disk full** is handled as any failed Git call: exit 2, nothing changed, no temporary index left. A write that fails halfway
+  through a file is not reproduced by the tests.
+
+## Testing
+
+The suite runs the real binary against real repositories in temporary directories, with a fixed identity and no user or system
+Git configuration. Properties checked:
+
+- **Invariant I1** for every command that must not change anything: a fingerprint of the branch ref, the index bytes and every
+  file (ignored and untracked too) is compared before and after.
+- **Every row of the interaction table** in [git-interactions.md](git-interactions.md), each ending with `git fsck` clean and the
+  stones loading.
+- **Crashes**, with the failpoints above, compared against a repository where the command was not interrupted.
+- **Hostile input**: names and descriptions with shell syntax, control characters and Unicode.
+- **Concurrency**: parallel `create` runs never corrupt or duplicate the chain.
+- **Failures**: an unwritable object store or ref, a damaged state ref, stale temporary indexes.
+- **Git behaviours the design relies on** (sparse checkout, split index, linked worktrees, signing, `merge-tree` exit codes and
+  output, `gc` roots), each as a test, so a Git upgrade that changes them fails loudly.
