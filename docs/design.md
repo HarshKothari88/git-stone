@@ -110,3 +110,16 @@ stops two snapshots in one process from sharing a file when they start in the sa
 
 - **Disk full is simulated with read-only directories, not a failpoint.** The plan asked for a failpoint. Git's own write errors take the same path (a failed `git` call, exit 2), and a read-only object store makes a real write fail, so the error handling that runs is the real one. A true full disk (a write that fails halfway through a file) is not reproduced.
 - `repair` with nothing to repair (in sync) exits 0 even during a merge; A11 says "repair refuses". It only refuses when there is something to change (`--apply` with a moved branch). Nothing can be lost either way.
+
+## Prune (added after Phase 7)
+
+`git stone prune [--apply] [--chain <ref>]` cleans up what nothing can reach any more.
+
+- **Leftover** = a `refs/stones/heads/<b>` whose branch `refs/heads/<b>` is gone, or a `refs/stones/detached/linked/<name>` whose directory under `<common dir>/worktrees/` is gone. The chain of the current scope and `refs/stones/detached/main` are never leftovers.
+- Without `--chain`, `--apply` removes only leftovers with **no stones**, plus temp indexes older than one hour. Chains that still hold stones (or cannot be read) are listed, with the exact `--chain` command and, for branches, the `adopt` hint. `--chain` takes the full ref, because a branch can be called `linked/x`.
+- Each removal is `update-ref -d <ref> <old>`, so a chain that changed meanwhile is not deleted.
+- **Deleting a ref also deletes its reflog**, so the old state cannot be found through the reflog. The command prints `git update-ref <ref> <oid>` for every removed chain; that works until `git gc` prunes the unreachable commit (two weeks by default).
+- Empty chains of branches that still exist are left alone: removing them would restart ids at 1 (I7).
+- Known gap: a worktree whose directory was deleted by hand but not yet pruned with `git worktree prune` still counts as existing.
+
+Tests: `tests/prune.rs`.
