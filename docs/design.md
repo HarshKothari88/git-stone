@@ -57,3 +57,29 @@ stops two snapshots in one process from sharing a file when they start in the sa
 
 - A real `index.lock` taken by another process between our check and `read-tree` is not simulated; the failure path prints the exact `git read-tree -m -i <H0> HEAD` recovery command.
 - `git commit` of an empty stone (made with `--allow-empty`) fails with git's own "nothing to commit"; nothing is changed. Drop the stone or commit with a real change.
+
+## Phase 6 findings (repair, adopt)
+
+| # | Item | Finding | Test |
+|---|------|---------|------|
+| 1 | `git merge-tree --write-tree --merge-base` (A9) | Needs Git 2.40 or newer. `repair` checks this (`git version`) and nothing else does. | `git_versions_are_read_from_the_first_line` |
+| 2 | Inputs | Plain **trees** work for the merge base and both sides. The plan's commit wrapping (`commit-tree`) is not needed, so no dangling commits are written. The empty tree works as the base (anchor `none`). | `an_anchor_of_none_uses_the_empty_tree_as_the_old_base` |
+| 3 | Exit codes | 0 clean, 1 conflict, 128 for a bad object. `Git::run_answers` treats 1 as an answer and anything else as a failure. | `a_conflicting_replay_changes_nothing_and_names_the_stone_and_paths` |
+| 4 | Output with `--name-only -z` | `<tree>\0`. On a conflict: each conflicted path, an empty token, then messages (ignored). The tree is written in both cases. | `merge_tree_output_is_split_into_tree_and_conflicted_paths` |
+| 5 | Moving a chain (A10b) | `update-ref --stdin` with `start`, `update`, `delete`, `prepare`, `commit` is one transaction. Both old values are checked, so a changed source or target fails the whole thing and nothing moves. A reflog for the new ref needs `-c core.logAllRefUpdates=always` (custom namespaces get none by default). Deleting the source also deletes its reflog. | `save_moved_changes_both_refs_or_neither`, `detached_stones_follow_a_new_branch` |
+
+### Behaviour the tests pin down
+
+- The plan (no `--apply`) writes only unreferenced objects; refs, index and files stay as they were.
+- After `repair --apply` every stone keeps its diff against the previous stone; only the base moves.
+- A stone that is partly committed by hand shrinks to the rest. A rebase with `--autostash` followed by repair
+  and commit does not revert the upstream change. A branch reset backwards keeps the stone's own work.
+- A replay conflict names the first stone that conflicts and its paths, and changes nothing.
+- `repair --apply` is refused while a merge or rebase runs, or when the branch has no commits. The plan still works.
+
+### Known gaps
+
+- **A conflicting replay is a dead end.** `drop` refuses when the branch moved (A9), so a stone that cannot be
+  replayed cannot be dropped either. Open question for the reviewer.
+- `repair` and `adopt` were not run on a SHA-256 repository; the state commit round trip is (Phase 1).
+- A crash inside the `adopt` transaction is not simulated; git's `prepare` step makes it all-or-nothing.
