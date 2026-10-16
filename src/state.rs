@@ -116,7 +116,7 @@ pub fn validate_description(text: &str) -> Result<Option<String>, String> {
 }
 
 /// The `branch` line of the meta file for a scope.
-fn branch_field(scope: &Scope) -> &str {
+pub fn branch_field(scope: &Scope) -> &str {
     match scope {
         Scope::Branch(full) => full,
         Scope::Detached => "detached",
@@ -277,8 +277,17 @@ impl State {
 
     /// Read the state of the current scope. Returns the state commit's oid too: it is the `old` value for `save`.
     pub fn load(repo: &Repo) -> Result<Option<(String, State)>, StateError> {
+        State::load_ref(repo, &repo.scope.state_ref(), branch_field(&repo.scope))
+    }
+
+    /// Read the state behind any state ref. `expected_branch` is the `branch` line it must carry.
+    pub fn load_ref(
+        repo: &Repo,
+        state_ref: &str,
+        expected_branch: &str,
+    ) -> Result<Option<(String, State)>, StateError> {
         let git = repo.git();
-        let Some(oid) = read_ref(&git, &repo.scope.state_ref())? else {
+        let Some(oid) = read_ref(&git, state_ref)? else {
             return Ok(None);
         };
         // A git failure here means the objects are missing or are not what they should be.
@@ -319,7 +328,7 @@ impl State {
             &meta,
             &entries,
             &descriptions,
-            branch_field(&repo.scope),
+            expected_branch,
             repo.empty_tree.len(),
         )?;
         Ok(Some((oid, state)))
