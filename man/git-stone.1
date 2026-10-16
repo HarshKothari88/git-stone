@@ -1,0 +1,83 @@
+.TH GIT-STONE 1 "" "git-stone" "Git Stone Manual"
+.SH NAME
+git-stone \- save task boundaries as you work, turn them into atomic commits later
+.SH SYNOPSIS
+.nf
+\fBgit stone\fR <name> [\fB\-d\fR <text>] [\fB\-\-allow\-empty\fR] [\fB\-\-force\fR]
+\fBgit stone \-\-\fR <name>
+\fBgit stone\fR [\fBstatus\fR] [\fB\-\-porcelain\fR]
+\fBgit stone list\fR [\fB\-\-porcelain\fR]
+\fBgit stone review\fR
+\fBgit stone diff\fR <id|current> [<git diff args>]
+\fBgit stone show\fR <id>
+\fBgit stone\fR <id> \fBcommit\fR [\fB\-m\fR <msg> | \fB\-F\fR <file> | \fB\-e\fR | \fB\-\-no\-verify\fR | \fB\-S\fR | \fB\-\-author\fR | \fB\-\-date\fR | \fB\-s\fR]
+\fBgit stone commit\-all\fR [\fB\-\-edit\fR]
+\fBgit stone\fR <id> \fBdrop\fR
+\fBgit stone repair\fR [\fB\-\-apply\fR]
+\fBgit stone adopt\fR <branch|detached>
+\fBgit stone prune\fR [\fB\-\-apply\fR] [\fB\-\-chain\fR <ref>]
+\fBgit stone agents\fR
+\fBgit stone help\fR | \fBversion\fR
+.fi
+.SH DESCRIPTION
+A \fIstone\fR is a snapshot of the whole working tree, saved when a task ends. It is stored as a Git tree under
+\fIrefs/stones/\fR. A stone's diff starts at the previous stone, so it shows only that task's changes. Stones can
+later be committed one by one with \fBgit stone <id> commit\fR, which makes an ordinary \fBgit commit\fR whose
+content is exactly that stone. Making a stone never changes the branch, the working tree or the index.
+.PP
+A stone is a boundary, not a branch. Dropping a stone removes the boundary, not the code. Stones are sequential
+and may depend on earlier stones. Final commits are ordinary Git commits.
+.SH COMMANDS
+.TP
+\fBgit stone\fR <name> [\fB\-d\fR <text>]
+Make a stone. \fB\-d\fR stores a longer description of what the task was and why.
+\fB\-\-allow\-empty\fR allows a stone with no changes. \fB\-\-force\fR allows a stone on a tree that equals the
+branch commit (usually after a stash). Use \fB\-\-\fR before a name that looks like a command, a number or starts with \-.
+.TP
+\fBstatus\fR, \fBlist\fR
+Show the stones and the current changes, or only the stones. \fB\-\-porcelain\fR prints version\-tagged,
+tab\-separated, NUL\-terminated records for scripts.
+.TP
+\fBreview\fR
+For every stone: description, files changed and line counts; then the current changes.
+.TP
+\fBdiff\fR <id|current>, \fBshow\fR <id>
+Show a stone's diff (extra arguments go to \fBgit diff\fR), or the unstoned changes, or one stone in full.
+.TP
+<id> \fBcommit\fR
+Commit the first stone. Runs a real \fBgit commit\fR, so hooks, signing and the editor work.
+.TP
+\fBcommit\-all\fR [\fB\-\-edit\fR]
+Commit every stone in order, using the stone names as messages.
+.TP
+<id> \fBdrop\fR
+Remove a boundary. No files change.
+.TP
+\fBrepair\fR [\fB\-\-apply\fR]
+After the branch moved, replay the stones onto the new HEAD with Git's three\-way merge. Without \fB\-\-apply\fR it
+only checks and prints a plan. Needs Git 2.40 or newer.
+.TP
+\fBadopt\fR <branch|detached>
+Move a chain to the branch you are on, after a rename or after \fBgit switch \-c\fR from a detached HEAD.
+.TP
+\fBprune\fR [\fB\-\-apply\fR] [\fB\-\-chain\fR <ref>]
+List, or with \fB\-\-apply\fR remove, empty chains of deleted branches and removed worktrees and stale temporary
+files. A chain that still holds stones is removed only when named with \fB\-\-chain\fR.
+.TP
+\fBagents\fR
+Print a block to paste into an AI agent's memory file.
+.SH EXIT STATUS
+0 success; 1 refused, with a message that says why and nothing changed; 2 internal or Git failure.
+.SH FILES
+.TP
+\fIrefs/stones/heads/<branch>\fR
+The stones of a branch.
+.TP
+\fIrefs/stones/detached/main\fR, \fIrefs/stones/detached/linked/<name>\fR
+The stones made on a detached HEAD, per worktree.
+.SH ENVIRONMENT
+.TP
+\fBGIT_STONE_FAILPOINT\fR
+Test hook: makes the process exit with status 99 at a named point.
+.SH SEE ALSO
+\fBgit\fR(1). Full documentation: https://github.com/HarshKothari88/git-stone
