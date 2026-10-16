@@ -170,6 +170,11 @@ impl Repo {
         })
     }
 
+    /// The all-zero id git uses for "this ref must not exist yet". Its length depends on the object format.
+    pub fn zero_oid(&self) -> String {
+        "0".repeat(self.empty_tree.len())
+    }
+
     /// A git runner that starts at the top of the working tree.
     pub fn git(&self) -> Git {
         Git::new().in_dir(&self.top)
@@ -217,13 +222,14 @@ fn single(out: &[u8]) -> Result<String, RepoError> {
     Ok(lines::<1>(out)?[0].to_string())
 }
 
+/// Fixture helpers shared by the unit tests of several modules.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testutil {
     use super::*;
     use std::fs;
 
     /// Git with a fixed identity and no user or system config, for building fixtures.
-    fn fixture_git(dir: &Path) -> Git {
+    pub fn fixture_git(dir: &Path) -> Git {
         Git::new()
             .in_dir(dir)
             .with_env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -235,17 +241,24 @@ mod tests {
             .with_env("HOME", dir)
     }
 
-    fn init(dir: &Path) -> Git {
+    pub fn init(dir: &Path) -> Git {
         let git = fixture_git(dir);
         git.run(["init", "-q", "-b", "main"]).unwrap();
         git
     }
 
-    fn commit_file(git: &Git, dir: &Path, name: &str, text: &str) {
+    pub fn commit_file(git: &Git, dir: &Path, name: &str, text: &str) {
         fs::write(dir.join(name), text).unwrap();
         git.run(["add", name]).unwrap();
         git.run(["commit", "-q", "-m", name]).unwrap();
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testutil::{commit_file, fixture_git, init};
+    use super::*;
+    use std::fs;
 
     #[test]
     fn state_ref_mirrors_the_branch_ref() {
