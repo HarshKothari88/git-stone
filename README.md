@@ -2,7 +2,7 @@
 
 Save the boundary of each task while you work. Turn the boundaries into clean Git commits later.
 
-![Git Stone in a terminal: two stones, status, commit-all](docs/demo.gif)
+![Without Git Stone, an agent leaves one pile of changes. With it, each task is a stone you review, fold with drop, and commit cleanly.](docs/demo.gif)
 
 ```text
 $ git stone "add login" -d "Adds login(). Covers the /login route."
