@@ -5,6 +5,8 @@ git-stone \- save task boundaries as you work, turn them into atomic commits lat
 .nf
 \fBgit stone\fR <name> [\fB\-d\fR <text>] [\fB\-\-allow\-empty\fR] [\fB\-\-force\fR]
 \fBgit stone \-\-\fR <name>
+\fBgit stone\fR <name> \fB\-x\fR <pattern> [\fB\-\-remember\fR]
+\fBgit stone exclude\fR [\fB\-\-remove\fR <pattern> | \fB\-\-clear\fR]
 \fBgit stone\fR [\fBstatus\fR] [\fB\-\-porcelain\fR]
 \fBgit stone list\fR [\fB\-\-porcelain\fR]
 \fBgit stone review\fR
@@ -34,6 +36,16 @@ and may depend on earlier stones. Final commits are ordinary Git commits.
 Make a stone. \fB\-d\fR stores a longer description of what the task was and why.
 \fB\-\-allow\-empty\fR allows a stone with no changes. \fB\-\-force\fR allows a stone on a tree that equals the
 branch commit (usually after a stash). Use \fB\-\-\fR before a name that looks like a command, a number or starts with \-.
+.TP
+\fBgit stone\fR <name> \fB\-x\fR <pattern> [\fB\-\-remember\fR]
+Leave paths out of this stone. A pattern is a Git pathspec, so \fI*.log\fR and \fIscratch/\fR both work; quote it
+so the shell does not expand it. A tracked file that matches keeps its version from the previous stone (or the branch
+commit), so it counts as unchanged. An untracked file that matches is not in the stone. \fB\-x\fR can be repeated.
+\fB\-\-remember\fR also saves the patterns as \fIstone.exclude\fR in this repository's own Git config, so every
+later stone leaves them out too, on every branch. The rules are never pushed or cloned. Each stone prints what was left out.
+.TP
+\fBexclude\fR [\fB\-\-remove\fR <pattern> | \fB\-\-clear\fR]
+Show the remembered patterns, remove one, or remove all. The next stone then includes those files again.
 .TP
 \fBstatus\fR, \fBlist\fR
 Show the stones and the current changes, or only the stones. \fB\-\-porcelain\fR prints version\-tagged,

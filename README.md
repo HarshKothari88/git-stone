@@ -183,6 +183,8 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 | Command | What it does |
 |---|---|
 | `git stone <name> [-d <text>]` | Make a stone. `-d` says in detail what the task was and why. |
+| `git stone <name> -x <pattern> [--remember]` | Leave matching paths out of this stone. Globs work (`'*.log'`, `scratch/`). `--remember` keeps the rule for every later stone in this repository, on every branch. |
+| `git stone exclude [--remove <pattern> \| --clear]` | Show the remembered rules, or remove one or all of them. |
 | `git stone -- <name>` | Same, for a name that looks like a command, a number, or starts with `-`. |
 | `git stone` / `git stone status [--porcelain]` | Stones, current changes, warnings. |
 | `git stone list [--porcelain]` | One line per stone. |
@@ -223,6 +225,10 @@ Details and examples: [docs/git-interactions.md](docs/git-interactions.md).
 - **A snapshot is what `git add -A` would stage.** Ignored files are not in it. Files marked assume-unchanged or
   skip-worktree keep their index version. A submodule is recorded at its checked-out commit; uncommitted changes
   inside it are not captured (`git stone status` warns). Renames are not stored; diffs detect them.
+- **Excluded paths are not in the stone** (`-x`, `--remember`). A tracked file that matches stays at its version from
+  the previous stone, so your edits to it are not captured and `git reset --hard` cannot restore them from a stone.
+  Rules live in this clone's `.git/config` (`stone.exclude`): they apply on every branch, and they are not pushed.
+  Every stone prints what was left out, so a rule that matches nothing (`0 files`) is easy to spot.
 - **The `post-index-change` hook** can fire on the temporary index used for a snapshot.
 - **A big unignored folder** (for example `node_modules`) ends up in the snapshot. Making a stone warns when it adds
   more than 1000 new paths.

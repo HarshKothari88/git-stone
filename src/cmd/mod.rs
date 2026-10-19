@@ -5,6 +5,7 @@ pub mod commit;
 pub mod create;
 pub mod diff;
 pub mod drop;
+pub mod exclude;
 pub mod list;
 pub mod prune;
 pub mod repair;

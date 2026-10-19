@@ -1,4 +1,4 @@
-use super::{find_stone, load_state, warn_if_moved, CmdResult};
+use super::{exclude, find_stone, load_state, warn_if_moved, CmdResult};
 use crate::chain;
 use crate::repo::Repo;
 use crate::snapshot;
@@ -18,8 +18,9 @@ pub fn run(repo: &Repo, target: &Target, args: &[String]) -> CmdResult {
             )
         }
         Target::Current => {
-            let tree = snapshot::snapshot(repo)?;
-            (chain::current_base(repo, state)?, tree)
+            let base = chain::current_base(repo, state)?;
+            let tree = snapshot::snapshot(repo, &base, &exclude::read(repo)?)?;
+            (base, tree)
         }
     };
     let mut git_args = vec!["diff".to_string(), base, tree];

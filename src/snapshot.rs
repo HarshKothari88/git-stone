@@ -97,11 +97,24 @@ impl Drop for TempIndex {
 }
 
 /// The tree that `git add -A && git write-tree` would make, with the real index left byte for byte as it was.
-pub fn snapshot(repo: &Repo) -> Result<String, SnapshotError> {
+///
+/// Paths matching `exclude` (git pathspecs, so globs work) are not read at all. A path that already
+/// exists in `base` keeps its version from `base`, also if it is staged in the real index, so it
+/// counts as unchanged. A path that is not in `base` is simply absent.
+pub fn snapshot(repo: &Repo, base: &str, exclude: &[String]) -> Result<String, SnapshotError> {
     let temp = TempIndex::create(repo)?;
-    // Runs at the top of the working tree with no pathspec, so the whole tree is seen.
+    // Runs at the top of the working tree, so the whole tree is seen.
     let git = repo.git().with_index(temp.path());
-    git.run(["add", "-A"])?;
+    if exclude.is_empty() {
+        git.run(["add", "-A"])?;
+    } else {
+        let mut add = vec!["add".to_string(), "-A".into(), "--".into(), ".".into()];
+        add.extend(exclude.iter().map(|p| format!(":(top,exclude){p}")));
+        git.run(add)?;
+        let mut reset = vec!["reset".to_string(), "-q".into(), base.into(), "--".into()];
+        reset.extend(exclude.iter().map(|p| format!(":(top){p}")));
+        git.run(reset)?;
+    }
     let tree = git.run(["write-tree"])?;
     Ok(String::from_utf8_lossy(&tree).trim().to_string())
 }
@@ -217,7 +230,7 @@ mod tests {
         let expected = oid(ref_git.run(["write-tree"]).unwrap());
 
         let before = fs::read(&repo.index_path).ok();
-        let tree = snapshot(&repo).unwrap();
+        let tree = snapshot(&repo, &repo.empty_tree, &[]).unwrap();
         assert_eq!(
             fs::read(&repo.index_path).ok(),
             before,
@@ -477,7 +490,7 @@ mod tests {
         let repo = Repo::discover_in(c.dir.path()).unwrap();
         let lock = repo.git_dir.join("index.lock");
         fs::write(&lock, b"held by someone else").unwrap();
-        assert_eq!(snapshot(&repo).unwrap(), c.tree);
+        assert_eq!(snapshot(&repo, &repo.empty_tree, &[]).unwrap(), c.tree);
         assert_eq!(fs::read(&lock).unwrap(), b"held by someone else");
     }
 
@@ -523,7 +536,7 @@ mod tests {
             fs::read(&repo.index_path).ok(),
             fs::read(&main_repo.index_path).ok(),
         );
-        let tree = snapshot(&repo).unwrap();
+        let tree = snapshot(&repo, &repo.empty_tree, &[]).unwrap();
         assert_eq!(fs::read(&repo.index_path).ok(), before);
         assert_eq!(fs::read(&main_repo.index_path).ok(), main_before);
         assert_eq!(leftovers(&repo), Vec::<String>::new());
@@ -554,7 +567,7 @@ mod tests {
         commit_file(&git, dir.path(), "base.txt", "base\n");
         let repo = Repo::discover_in(dir.path()).unwrap();
         fs::write(&repo.index_path, b"this is not an index").unwrap();
-        let err = snapshot(&repo).unwrap_err();
+        let err = snapshot(&repo, &repo.empty_tree, &[]).unwrap_err();
         assert_eq!(err.exit_code(), 2);
         assert!(matches!(err, SnapshotError::Git(_)), "{err:?}");
         assert_eq!(leftovers(&repo), Vec::<String>::new());

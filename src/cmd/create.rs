@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{indented, load_state, require_clean_start, sync_chain, CmdError, CmdResult};
+use super::{exclude, indented, load_state, require_clean_start, sync_chain, CmdError, CmdResult};
 use crate::chain;
 use crate::failpoint::failpoint;
 use crate::repo::Repo;
@@ -16,12 +16,23 @@ pub fn run(
     description: Option<&str>,
     allow_empty: bool,
     force: bool,
+    exclude: &[String],
+    remember: bool,
 ) -> CmdResult {
     let name = state::validate_name(name).map_err(CmdError::user)?;
     let description = match description {
         Some(text) => state::validate_description(text).map_err(CmdError::user)?,
         None => None,
     };
+
+    // Saved rules first, then the ones typed for this stone only.
+    let typed = exclude::normalize(exclude)?;
+    let mut rules = exclude::read(repo)?;
+    for rule in &typed {
+        if !rules.contains(rule) {
+            rules.push(rule.clone());
+        }
+    }
 
     snapshot::clean_stale(repo);
     require_clean_start(repo, "making a stone")?;
@@ -46,18 +57,22 @@ pub fn run(
         state.anchor = repo.head.clone();
     }
 
-    let tree = snapshot::snapshot(repo)?;
     let base = chain::latest_tree(repo, &state)?;
+    let tree = snapshot::snapshot(repo, &base, &rules)?;
     let git = repo.git();
 
     if tree == base && !allow_empty {
-        return Err(CmdError::user(match state.stones.last() {
+        let mut message = match state.stones.last() {
             Some(last) => format!("Nothing changed since Stone {}.", last.id),
             None if state.anchor.is_some() => {
                 "Nothing changed since the branch commit.".to_string()
             }
             None => "Nothing to stone yet: the working tree is empty.".to_string(),
-        }));
+        };
+        if !rules.is_empty() {
+            message.push_str(" Files matching your exclude rules are not counted.");
+        }
+        return Err(CmdError::user(message));
     }
     if let Some(last) = state.stones.last() {
         if !force && tree == chain::anchor_tree(repo, &state)? {
@@ -90,10 +105,26 @@ pub fn run(
     failpoint("create:before-cas");
     state.save(repo, old.as_deref(), &format!("create {id}"))?;
 
+    // The rule is saved after the stone, so a refused stone leaves no rule behind.
+    if remember {
+        exclude::add(repo, &typed).map_err(|e| {
+            CmdError::user(format!(
+                "Stone {id} was created, but the exclude rule could not be saved: {}",
+                e.message
+            ))
+        })?;
+    }
+
     println!("Stone {id} created: {name}");
     println!("  {}", chain::summary(&chain::numstat(&git, &base, &tree)?));
     if let Some(text) = &description {
         println!("{}", indented(text, "  "));
+    }
+    if !rules.is_empty() {
+        println!("  Left out: {}", exclude::describe(repo, &rules)?);
+    }
+    if remember {
+        println!("  Remembered for this repository, on every branch. See: git stone exclude");
     }
     Ok(0)
 }

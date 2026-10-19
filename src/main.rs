@@ -15,6 +15,9 @@ const HELP: &str = "\
 git stone - save task boundaries as you work, commit them later
 
   git stone <name> [-d <text>]      create a stone; -d says in detail what it is for
+  git stone <name> -x <pattern> [--remember]   leave matching paths (globs work) out of this stone;
+                                    --remember keeps the rule for this repository, every branch
+  git stone exclude [--remove <pattern> | --clear]   show or change the remembered rules
   git stone -- <name>               create, when the name looks like a command, a number, or starts with -
   git stone                         same as status
   git stone status [--porcelain]
@@ -52,6 +55,7 @@ const VERBS: &[&str] = &[
     "repair",
     "adopt",
     "prune",
+    "exclude",
     "agents",
     "setup",
     "help",
@@ -65,6 +69,13 @@ enum Target {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum ExcludeAction {
+    List,
+    Remove(String),
+    Clear,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum Command {
     Create {
         name: String,
@@ -72,7 +83,12 @@ enum Command {
         description: Option<String>,
         allow_empty: bool,
         force: bool,
+        /// Git pathspecs for this stone, as typed. The create command checks them.
+        exclude: Vec<String>,
+        /// Save `exclude` for later stones in this repository.
+        remember: bool,
     },
+    Exclude(ExcludeAction),
     Status {
         porcelain: bool,
     },
@@ -179,6 +195,7 @@ fn parse(args: &[String]) -> Result<Command, String> {
             ),
         },
         "prune" => parse_prune(rest),
+        "exclude" => parse_exclude(rest),
         "agents" => no_args("agents", rest).map(|()| Command::Agents),
         "setup" => parse_setup(rest),
         "help" => no_args("help", rest).map(|()| Command::Help),
@@ -212,6 +229,19 @@ fn parse_setup(rest: &[String]) -> Result<Command, String> {
     let agent = agent
         .ok_or("setup needs --agent: git stone setup --agent <claude|codex|both> [--global]")?;
     Ok(Command::Setup { agent, global })
+}
+
+fn parse_exclude(rest: &[String]) -> Result<Command, String> {
+    match rest {
+        [] => Ok(Command::Exclude(ExcludeAction::List)),
+        [flag] if flag == "--clear" => Ok(Command::Exclude(ExcludeAction::Clear)),
+        [flag, pattern] if flag == "--remove" => {
+            Ok(Command::Exclude(ExcludeAction::Remove(pattern.clone())))
+        }
+        _ => {
+            Err("exclude takes nothing (show the rules), `--remove <pattern>` or `--clear`.".into())
+        }
+    }
 }
 
 fn parse_prune(rest: &[String]) -> Result<Command, String> {
@@ -267,6 +297,7 @@ fn parse_id_first(number: &str, rest: &[String]) -> Result<Command, String> {
 /// Everything else is a new stone. Flags may sit anywhere before `--`; the name is one argument.
 fn parse_create(args: &[String]) -> Result<Command, String> {
     let (mut allow_empty, mut force, mut after_dashes) = (false, false, false);
+    let (mut exclude, mut remember) = (Vec::new(), false);
     let mut description: Option<String> = None;
     let mut names: Vec<&str> = Vec::new();
     let mut args = args.iter();
@@ -279,6 +310,12 @@ fn parse_create(args: &[String]) -> Result<Command, String> {
             "--" => after_dashes = true,
             "--allow-empty" => allow_empty = true,
             "--force" => force = true,
+            "--remember" => remember = true,
+            "-x" | "--exclude" => match args.next() {
+                Some(pattern) => exclude.push(pattern.clone()),
+                None => return Err(format!("`{arg}` needs a pattern: git stone \"name\" -x '*.log'")),
+            },
+            s if s.starts_with("--exclude=") => exclude.push(s["--exclude=".len()..].to_string()),
             "-d" | "--description" => {
                 // The value is taken as is, even if it starts with a dash.
                 let Some(text) = args.next() else {
@@ -312,12 +349,20 @@ fn parse_create(args: &[String]) -> Result<Command, String> {
             s => names.push(s),
         }
     }
+    if remember && exclude.is_empty() {
+        return Err(
+            "--remember saves what you pass with -x: git stone \"name\" -x '*.log' --remember"
+                .into(),
+        );
+    }
     match names.as_slice() {
         [name] => Ok(Command::Create {
             name: (*name).to_string(),
             description,
             allow_empty,
             force,
+            exclude,
+            remember,
         }),
         [] => Err("A stone needs a name: git stone \"what you finished\"".into()),
         _ => Err(
@@ -428,7 +473,18 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
             description,
             allow_empty,
             force,
-        } => create::run(&repo, name, description.as_deref(), *allow_empty, *force),
+            exclude,
+            remember,
+        } => create::run(
+            &repo,
+            name,
+            description.as_deref(),
+            *allow_empty,
+            *force,
+            exclude,
+            *remember,
+        ),
+        Command::Exclude(action) => cmd::exclude::run(&repo, action),
         Command::Status { porcelain } => status::run(&repo, *porcelain),
         Command::List { porcelain } => list::run(&repo, *porcelain),
         Command::Review => review::run(&repo),
@@ -465,6 +521,8 @@ mod tests {
             description: None,
             allow_empty: false,
             force: false,
+            exclude: vec![],
+            remember: false,
         }
     }
 
@@ -548,6 +606,8 @@ mod tests {
             description: None,
             allow_empty: true,
             force: true,
+            exclude: vec![],
+            remember: false,
         };
         assert_eq!(p(&["--allow-empty", "--force", "auth"]), Ok(expected));
         assert_eq!(
@@ -557,6 +617,8 @@ mod tests {
                 description: None,
                 allow_empty: false,
                 force: true,
+                exclude: vec![],
+                remember: false,
             })
         );
         // After `--` a flag-looking word is part of the name.
@@ -567,6 +629,8 @@ mod tests {
                 description: None,
                 allow_empty: false,
                 force: true,
+                exclude: vec![],
+                remember: false,
             })
         );
     }
@@ -577,6 +641,8 @@ mod tests {
             description: Some(description.into()),
             allow_empty: false,
             force: false,
+            exclude: vec![],
+            remember: false,
         }
     }
 
@@ -732,6 +798,40 @@ mod tests {
         assert!(p(&["status", "--nope"]).is_err());
         assert!(p(&["list", "--porcelain", "extra"]).is_err());
         assert!(p(&["review", "extra"]).is_err());
+    }
+
+    #[test]
+    fn exclude_flags_on_create() {
+        assert_eq!(
+            p(&["auth", "-x", "*.log", "--exclude=tmp/", "--remember"]),
+            Ok(Command::Create {
+                name: "auth".into(),
+                description: None,
+                allow_empty: false,
+                force: false,
+                exclude: vec!["*.log".into(), "tmp/".into()],
+                remember: true,
+            })
+        );
+        assert!(p(&["auth", "-x"]).is_err());
+        assert!(p(&["auth", "--remember"]).is_err());
+    }
+
+    #[test]
+    fn exclude_command() {
+        assert_eq!(p(&["exclude"]), Ok(Command::Exclude(ExcludeAction::List)));
+        assert_eq!(
+            p(&["exclude", "--remove", "*.log"]),
+            Ok(Command::Exclude(ExcludeAction::Remove("*.log".into())))
+        );
+        assert_eq!(
+            p(&["exclude", "--clear"]),
+            Ok(Command::Exclude(ExcludeAction::Clear))
+        );
+        assert!(p(&["exclude", "--remove"]).is_err());
+        assert!(p(&["exclude", "extra"]).is_err());
+        // A stone named like the command needs `--`.
+        assert!(p(&["--", "exclude"]).is_ok());
     }
 
     #[test]

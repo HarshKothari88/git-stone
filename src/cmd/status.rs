@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::{load_state, moved_warning, movement_warning, scope_label, short, CmdResult};
+use super::{exclude, load_state, moved_warning, movement_warning, scope_label, short, CmdResult};
 use crate::chain::{self, Change, Movement};
 use crate::repo::{Repo, Scope};
 use crate::snapshot;
@@ -28,8 +28,9 @@ pub fn run(repo: &Repo, porcelain: bool) -> CmdResult {
     let stones: &[Stone] = state.map_or(&[], |s| &s.stones);
     let git = repo.git();
 
-    let current = snapshot::snapshot(repo)?;
     let base = chain::current_base(repo, state)?;
+    let rules = exclude::read(repo)?;
+    let current = snapshot::snapshot(repo, &base, &rules)?;
     let changes = chain::name_status(&git, &base, &current)?;
     let warnings = collect_warnings(repo, state, &current)?;
 
@@ -93,6 +94,10 @@ pub fn run(repo: &Repo, porcelain: bool) -> CmdResult {
     if !changes.is_empty() {
         let noun = if changes.len() == 1 { "file" } else { "files" };
         println!("\nUnstoned changes: {} {noun}", changes.len());
+    }
+
+    if !rules.is_empty() {
+        println!("\nExcluded by rule: {}", rules.join(", "));
     }
 
     if !warnings.is_empty() {

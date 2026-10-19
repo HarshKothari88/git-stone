@@ -1,4 +1,4 @@
-use super::{indented, load_state, warn_if_moved, CmdResult};
+use super::{exclude, indented, load_state, warn_if_moved, CmdResult};
 use crate::chain::{self, FileStat};
 use crate::repo::Repo;
 use crate::snapshot;
@@ -24,8 +24,8 @@ pub fn run(repo: &Repo) -> CmdResult {
         }
     }
 
-    let current = snapshot::snapshot(repo)?;
     let base = chain::current_base(repo, state)?;
+    let current = snapshot::snapshot(repo, &base, &exclude::read(repo)?)?;
     println!("CURRENT");
     print_stats(&chain::numstat(&git, &base, &current)?);
     Ok(0)
