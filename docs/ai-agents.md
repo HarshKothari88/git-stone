@@ -17,6 +17,10 @@ git stone setup --agent both --global      # every project: ~/.claude/CLAUDE.md 
   (`<!-- git-stone:begin ... -->` and `<!-- git-stone:end -->`). A file that does not exist is created.
 - Running it again is safe: an up-to-date block changes nothing, and an older one is replaced in place, so rerun it after
   upgrading Git Stone. To remove the block, delete the lines between and including the markers.
+- After upgrading, `git stone setup --update` refreshes the block in every file that already has one (this project's
+  `CLAUDE.md` and `AGENTS.md`, `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`). It creates nothing and skips files without our
+  markers. `git stone status` warns (`agent-instructions-outdated`) when a block is older than the installed version.
+  A block pasted by hand has no markers, so replace that one yourself.
 - A symlinked `CLAUDE.md` or `AGENTS.md` stays a symlink. A file with a damaged marker is refused and nothing is changed.
 - The agent reads the file when it starts a new session.
 
@@ -81,7 +85,7 @@ An agent that needs more can read these on demand; they do not belong in always-
 - `git stone status --porcelain` adds records: `scope<TAB><ref|detached>`, `head<TAB><oid>`, `anchor<TAB><oid>` (different
   means the branch moved), `change<TAB><code><TAB><path>`, and `warning<TAB><code><TAB><text>`. Warning codes:
   `branch-moved`, `stones-already-committed`, `operation-in-progress`, `unmerged-paths`, `matches-branch-commit`,
-  `dirty-submodule`, `orphaned-chain`, `detached-chain`, `branch-in-two-worktrees`.
+  `dirty-submodule`, `orphaned-chain`, `detached-chain`, `branch-in-two-worktrees`, `agent-instructions-outdated`.
 - A `stone` record is `stone<TAB><id><TAB><created unix seconds><TAB><tree><TAB><name><TAB><description>`. The description
   may contain tabs and newlines but never NUL, so split on NUL first, then on tab with at most 6 fields.
 - A stone is refused while a merge, rebase or cherry-pick is in progress, while files have conflicts, when nothing changed

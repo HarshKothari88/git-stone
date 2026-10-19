@@ -169,3 +169,111 @@ fn bad_arguments_are_refused() {
     }
     assert!(!r.dir.join("CLAUDE.md").exists());
 }
+
+const OLD_BLOCK: &str =
+    "<!-- git-stone:begin (old) -->\nOLD INSTRUCTIONS\n<!-- git-stone:end -->\n";
+
+#[test]
+fn update_refreshes_only_the_files_that_already_have_a_block() {
+    let r = Repo::new();
+    r.write("CLAUDE.md", &format!("mine\n\n{OLD_BLOCK}\nafter\n"));
+    // AGENTS.md exists but has no block of ours: it must stay exactly as it is.
+    r.write("AGENTS.md", "# Only mine\n");
+    let claude = r.home().join(".claude");
+    fs::create_dir_all(&claude).unwrap();
+    fs::write(claude.join("CLAUDE.md"), OLD_BLOCK).unwrap();
+
+    let out = r.ok(&["setup", "--update"]);
+    assert_eq!(out.matches("updated").count(), 2, "{out}");
+    let text = r.read("CLAUDE.md");
+    assert!(
+        text.starts_with("mine\n\n") && text.ends_with("\nafter\n"),
+        "{text}"
+    );
+    assert!(text.contains("## Git Stone (task boundaries)") && !text.contains("OLD INSTRUCTIONS"));
+    assert_eq!(r.read("AGENTS.md"), "# Only mine\n");
+    assert!(fs::read_to_string(claude.join("CLAUDE.md"))
+        .unwrap()
+        .contains("## Git Stone (task boundaries)"));
+    // Nothing was created.
+    assert!(!r.home().join(".codex").exists());
+
+    let again = r.ok(&["setup", "--update"]);
+    assert!(
+        again.contains("already up to date") && !again.contains("updated"),
+        "{again}"
+    );
+}
+
+#[test]
+fn update_with_no_block_anywhere_creates_nothing_and_says_how_to_add_one() {
+    let r = Repo::new();
+    r.write("CLAUDE.md", "# Mine\n");
+    let out = r.ok(&["setup", "--update"]);
+    assert!(out.contains("No Git Stone block found"), "{out}");
+    assert!(out.contains("git stone setup --agent"), "{out}");
+    assert_eq!(r.read("CLAUDE.md"), "# Mine\n");
+    assert!(!r.dir.join("AGENTS.md").exists() && !r.home().join(".claude").exists());
+}
+
+#[test]
+fn update_works_outside_a_repository_for_the_agents_own_files() {
+    let r = Repo::new();
+    let codex = r.home().join(".codex");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(codex.join("AGENTS.md"), OLD_BLOCK).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let o = r.stone_in(elsewhere.path(), &["setup", "--update"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(fs::read_to_string(codex.join("AGENTS.md"))
+        .unwrap()
+        .contains("## Git Stone (task boundaries)"));
+}
+
+#[test]
+fn a_damaged_block_stops_update_and_changes_no_file() {
+    let r = Repo::new();
+    r.write("CLAUDE.md", OLD_BLOCK);
+    r.write("AGENTS.md", "<!-- git-stone:begin -->\nno end line\n");
+    let o = r.stone(&["setup", "--update"]);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert_eq!(r.read("CLAUDE.md"), OLD_BLOCK);
+}
+
+#[test]
+fn status_warns_about_an_old_block_until_it_is_updated() {
+    let r = Repo::new();
+    r.write("CLAUDE.md", OLD_BLOCK);
+    let status = r.ok(&["status"]);
+    assert!(status.contains("Agent instructions are older"), "{status}");
+    assert!(status.contains("git stone setup --update"), "{status}");
+    let porcelain = r.ok(&["status", "--porcelain"]);
+    assert!(
+        porcelain.contains("warning\tagent-instructions-outdated\t"),
+        "{porcelain}"
+    );
+
+    r.ok(&["setup", "--update"]);
+    let status = r.ok(&["status"]);
+    assert!(!status.contains("Agent instructions"), "{status}");
+}
+
+#[test]
+fn status_is_quiet_when_no_block_exists() {
+    let r = Repo::new();
+    r.write("CLAUDE.md", "# Mine\n");
+    assert!(!r.ok(&["status"]).contains("Agent instructions"));
+}
+
+#[test]
+fn update_takes_no_other_option() {
+    let r = Repo::new();
+    for args in [
+        &["setup", "--update", "--global"][..],
+        &["setup", "--update", "--agent", "claude"],
+        &["setup", "--update", "extra"],
+    ] {
+        let o = r.stone(args);
+        assert_eq!(o.code, 1, "{args:?}: {}{}", o.stdout, o.stderr);
+    }
+}

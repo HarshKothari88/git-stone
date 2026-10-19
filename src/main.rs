@@ -34,6 +34,7 @@ git stone - save task boundaries as you work, commit them later
   git stone prune [--apply] [--chain <ref>]       list (or remove) chains of deleted branches and worktrees
   git stone agents                                print a block to paste into an AI agent's memory
   git stone setup --agent <claude|codex|both> [--global]   add that block to CLAUDE.md / AGENTS.md for you
+  git stone setup --update                        refresh the block in files that already have it
   git stone help | version
 
 create flags: --allow-empty, --force
@@ -133,6 +134,8 @@ enum Command {
         agent: cmd::setup::Agent,
         global: bool,
     },
+    /// Refreshes the block in the memory files that already have it.
+    SetupUpdate,
     Help,
     Version,
 }
@@ -206,6 +209,12 @@ fn parse(args: &[String]) -> Result<Command, String> {
 }
 
 fn parse_setup(rest: &[String]) -> Result<Command, String> {
+    if rest.iter().any(|a| a == "--update") {
+        return match rest {
+            [_only] => Ok(Command::SetupUpdate),
+            _ => Err("`setup --update` takes no other option; it refreshes the files that already have the block.".into()),
+        };
+    }
     let (mut agent, mut global) = (None, false);
     let mut args = rest.iter();
     while let Some(arg) = args.next() {
@@ -226,8 +235,9 @@ fn parse_setup(rest: &[String]) -> Result<Command, String> {
             }
         }
     }
-    let agent = agent
-        .ok_or("setup needs --agent: git stone setup --agent <claude|codex|both> [--global]")?;
+    let agent = agent.ok_or(
+        "setup needs --agent: git stone setup --agent <claude|codex|both> [--global]\nTo refresh a block that is already there: git stone setup --update",
+    )?;
     Ok(Command::Setup { agent, global })
 }
 
@@ -441,6 +451,7 @@ fn run() -> i32 {
             0
         }
         Command::Setup { agent, global } => report(cmd::setup::run(agent, global)),
+        Command::SetupUpdate => report(cmd::setup::update()),
         Command::Version => {
             println!("git-stone {}", env!("CARGO_PKG_VERSION"));
             0
@@ -496,7 +507,11 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::Repair { apply } => repair::run(&repo, *apply),
         Command::Adopt { source } => adopt::run(&repo, source),
         Command::Prune { apply, chain } => prune::run(&repo, *apply, chain.as_deref()),
-        Command::Help | Command::Version | Command::Agents | Command::Setup { .. } => {
+        Command::Help
+        | Command::Version
+        | Command::Agents
+        | Command::Setup { .. }
+        | Command::SetupUpdate => {
             unreachable!("handled before dispatch")
         }
     }
@@ -798,6 +813,13 @@ mod tests {
         assert!(p(&["status", "--nope"]).is_err());
         assert!(p(&["list", "--porcelain", "extra"]).is_err());
         assert!(p(&["review", "extra"]).is_err());
+    }
+
+    #[test]
+    fn setup_update() {
+        assert_eq!(p(&["setup", "--update"]), Ok(Command::SetupUpdate));
+        assert!(p(&["setup", "--update", "--global"]).is_err());
+        assert!(p(&["setup", "--update", "--agent", "claude"]).is_err());
     }
 
     #[test]

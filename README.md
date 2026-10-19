@@ -198,6 +198,7 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 | `git stone adopt <branch\|detached>` | Move a chain to the branch you are on (after a rename, or after `git switch -c`). |
 | `git stone prune [--apply] [--chain <ref>]` | List (or remove) chains of deleted branches and removed worktrees. |
 | `git stone setup --agent <claude\|codex\|both> [--global]` | Add the AI-agent block to `CLAUDE.md` / `AGENTS.md` (this project, or with `--global` your own agent folder). |
+| `git stone setup --update` | Refresh the block in every `CLAUDE.md` / `AGENTS.md` that already has it (this project, `~/.claude`, `~/.codex`). Creates nothing. `git stone status` tells you when a block is older than your install. |
 | `git stone agents` | Print that block, to paste into any other tool. |
 
 `create` also takes `--allow-empty` and `--force`. `git stone <id> <verb>` and `git stone <verb> <id>` both work.

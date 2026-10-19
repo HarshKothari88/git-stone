@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::{exclude, load_state, moved_warning, movement_warning, scope_label, short, CmdResult};
+use super::{
+    exclude, load_state, moved_warning, movement_warning, scope_label, setup, short, CmdResult,
+};
 use crate::chain::{self, Change, Movement};
 use crate::repo::{Repo, Scope};
 use crate::snapshot;
@@ -133,6 +135,17 @@ fn collect_warnings(
                     .replacen("Warning: ", "", 1),
             )),
         }
+    }
+    let old_memory = setup::outdated();
+    if !old_memory.is_empty() {
+        let files: Vec<String> = old_memory.iter().map(|p| p.display().to_string()).collect();
+        out.push(warning(
+            "agent-instructions-outdated",
+            format!(
+                "Agent instructions are older than this git-stone: {}\nRun `git stone setup --update` to refresh them.",
+                files.join(", ")
+            ),
+        ));
     }
     if let Some(op) = repo.op_in_progress()? {
         out.push(warning(

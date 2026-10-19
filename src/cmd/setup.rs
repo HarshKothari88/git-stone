@@ -9,6 +9,8 @@ use crate::AGENT_MEMORY;
 const BEGIN: &str =
     "<!-- git-stone:begin (managed by `git stone setup`; edit outside these lines) -->";
 const END: &str = "<!-- git-stone:end -->";
+/// The start of the begin line, whatever words follow it.
+const BEGIN_PREFIX: &str = "<!-- git-stone:begin";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
@@ -28,9 +30,53 @@ pub fn run(agent: Agent, global: bool) -> CmdResult {
             ("Codex", file(false, global)?),
         ],
     };
-    // Work out everything first, so a refusal for one file changes none of them.
+    write_all(&targets, false)
+}
+
+/// `git stone setup --update`: refresh the block in every memory file that already has one.
+/// Looks in the usual four places (`CLAUDE.md` and `AGENTS.md` of this project, and the agent folders in
+/// the user's home). A file without our block is left alone, so nothing new is created.
+pub fn update() -> CmdResult {
+    let targets = known_files();
+    write_all(&targets, true)?;
+    Ok(0)
+}
+
+/// The memory files that have our block and whose block differs from this version's.
+pub fn outdated() -> Vec<PathBuf> {
+    known_files()
+        .into_iter()
+        .filter_map(|(_, path)| {
+            let text = fs::read_to_string(&path).ok()?;
+            if !text.contains(BEGIN_PREFIX) {
+                return None;
+            }
+            // A damaged block is not ours to judge here; `setup` explains it.
+            matches!(merge(&text, AGENT_MEMORY), Ok(Some(_))).then_some(path)
+        })
+        .collect()
+}
+
+/// Project files (when inside a repository) and the agents' own files, each once.
+fn known_files() -> Vec<(&'static str, PathBuf)> {
+    let mut found: Vec<(&'static str, PathBuf)> = Vec::new();
+    for global in [false, true] {
+        for (name, claude) in [("Claude Code", true), ("Codex", false)] {
+            if let Ok(path) = file(claude, global) {
+                if !found.iter().any(|(_, seen)| *seen == path) {
+                    found.push((name, path));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Plan every file first, so a refusal for one file changes none of them, then write.
+/// With `only_with_block`, files that do not exist or have no block of ours are skipped.
+fn write_all(targets: &[(&'static str, PathBuf)], only_with_block: bool) -> CmdResult {
     let mut plans = Vec::new();
-    for (name, path) in &targets {
+    for (name, path) in targets {
         let existing = match fs::read(path) {
             Ok(bytes) => Some(String::from_utf8(bytes).map_err(|_| {
                 CmdError::user(format!(
@@ -46,10 +92,22 @@ pub fn run(agent: Agent, global: bool) -> CmdResult {
                 )))
             }
         };
+        if only_with_block
+            && !existing
+                .as_deref()
+                .is_some_and(|t| t.contains(BEGIN_PREFIX))
+        {
+            continue;
+        }
         let merged = merge(existing.as_deref().unwrap_or(""), AGENT_MEMORY).map_err(|why| {
             CmdError::user(format!("{}: {why} Nothing was changed.", path.display()))
         })?;
         plans.push((*name, path, existing.is_some(), merged));
+    }
+    if plans.is_empty() {
+        println!("No Git Stone block found in CLAUDE.md or AGENTS.md of this project, or in ~/.claude and ~/.codex.");
+        println!("To add one: git stone setup --agent <claude|codex|both> [--global]");
+        return Ok(0);
     }
     for (name, path, existed, merged) in plans {
         match merged {
@@ -107,7 +165,7 @@ fn file(claude: bool, global: bool) -> Result<PathBuf, CmdError> {
 /// An existing block is replaced in place; otherwise it is added at the end after a blank line.
 fn merge(existing: &str, block: &str) -> Result<Option<String>, String> {
     let ours = format!("{BEGIN}\n{}\n{END}\n", block.trim_end());
-    let begins = existing.matches("<!-- git-stone:begin").count();
+    let begins = existing.matches(BEGIN_PREFIX).count();
     let ends = existing.matches(END).count();
     if begins == 0 && ends == 0 {
         let mut text = existing.to_string();
@@ -123,7 +181,7 @@ fn merge(existing: &str, block: &str) -> Result<Option<String>, String> {
     if begins != 1 || ends != 1 {
         return Err("it has a damaged Git Stone block (a begin or end line is missing or repeated); fix or remove it by hand.".into());
     }
-    let start = existing.find("<!-- git-stone:begin").unwrap_or(0);
+    let start = existing.find(BEGIN_PREFIX).unwrap_or(0);
     let stop = existing.find(END).unwrap_or(0);
     if stop < start {
         return Err("its Git Stone block ends before it begins; fix or remove it by hand.".into());
