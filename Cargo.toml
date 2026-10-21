@@ -1,6 +1,6 @@
 [package]
 name = "git-stone"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Save task boundaries as you work, then turn them into atomic Git commits later"
 license = "MIT OR Apache-2.0"
