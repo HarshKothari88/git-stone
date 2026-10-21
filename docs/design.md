@@ -12,12 +12,13 @@ recipes see [internals.md](internals.md). For what normal Git commands do to sto
 4. [Storage](#storage)
 5. [Snapshots](#snapshots)
 6. [Commands](#commands)
-7. [When the branch moves](#when-the-branch-moves)
-8. [Concurrency and crash safety](#concurrency-and-crash-safety)
-9. [Design decisions](#design-decisions)
-10. [Performance](#performance)
-11. [Limits](#limits)
-12. [Testing](#testing)
+7. [Leaving paths out](#leaving-paths-out)
+8. [When the branch moves](#when-the-branch-moves)
+9. [Concurrency and crash safety](#concurrency-and-crash-safety)
+10. [Design decisions](#design-decisions)
+11. [Performance](#performance)
+12. [Limits](#limits)
+13. [Testing](#testing)
 
 ## Purpose
 
@@ -191,6 +192,23 @@ worktree was removed. Without `--chain`, only empty chains and stale temporary i
 stones is listed and removed only when named. Empty chains of branches that still exist are left alone, because removing
 them would restart ids at 1 (I7). Each removal deletes the ref only if it still holds the listed value, and the command
 prints the `update-ref` that restores it (deleting a ref also deletes its reflog).
+
+## Leaving paths out
+
+`git stone <name> -x <pattern>` leaves paths out of one stone; `--remember` keeps the pattern for every later stone of this
+clone, on every branch. The cut is made in the snapshot, never in `commit`, because a stone's tree is exactly what its commit
+will hold (I5): a file in the tree would be in the commit.
+
+- Patterns are git pathspecs, so globs work (`*.log` matches at every depth, `scratch/` is a folder).
+- The snapshot runs `git add -A -- . ':(top,exclude)<p>'` on the temporary index, then `git reset -q <base> -- ':(top)<p>'`.
+  `<base>` is the latest stone's tree, or the anchor's. A tracked file that matches keeps its base version (also when it is
+  staged in the real index); an untracked one is absent.
+- Rules are the multi-value `stone.exclude` in the repository's own `.git/config`: not in the state commit (no format change,
+  nothing for `adopt`, `prune` or `repair` to carry), not pushed, shared by every branch and worktree of the clone. Patterns
+  typed in a subfolder are stored relative to the top.
+- Every stone prints what was left out (`Left out: *.log (3 files)`), so a pattern that matches nothing shows `(0 files)`.
+- Stones stay immutable (I2): there is no command to remove a path from a stone that exists.
+- Excluded files are in no stone, so a stone cannot restore them after `git reset --hard`.
 
 ## When the branch moves
 
