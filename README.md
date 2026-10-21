@@ -184,6 +184,7 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 |---|---|
 | `git stone <name> [-d <text>]` | Make a stone. `-d` says in detail what the task was and why. |
 | `git stone <name> -x <pattern> [--remember]` | Leave matching paths out of this stone. Globs work (`'*.log'`, `scratch/`). `--remember` keeps the rule for every later stone in this repository, on every branch. |
+| `git stone guard [block\|warn\|off]` | While a branch has stones, refuse (or warn about) plain git commands that move it, so agents must use `git stone <id> commit`. See [The guard](#the-guard). |
 | `git stone exclude [--remove <pattern> \| --clear]` | Show the remembered rules, or remove one or all of them. |
 | `git stone -- <name>` | Same, for a name that looks like a command, a number, or starts with `-`. |
 | `git stone` / `git stone status [--porcelain]` | Stones, current changes, warnings. |
@@ -202,6 +203,28 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 | `git stone agents` | Print that block, to paste into any other tool. |
 
 `create` also takes `--allow-empty` and `--force`. `git stone <id> <verb>` and `git stone <verb> <id>` both work.
+
+## The guard
+
+Agents that make stones sometimes still run a plain `git commit`. That moves the branch under the stones, and later
+`repair` may conflict because the branch already holds the work. The guard stops it before it happens:
+
+```sh
+git stone guard block     # while a branch has stones, a plain git command that moves it is refused
+git stone guard warn      # allow it, but print a warning
+git stone guard off       # remove it
+```
+
+- It is a small `reference-transaction` hook in `.git/hooks`, and a setting (`stone.guard`) in this clone's `.git/config`.
+  Git runs that hook also for `git commit --no-verify`, so the agent cannot skip it that way.
+- Refused: `commit`, `commit --amend`, `reset`, `rebase`, `pull`, `merge` ... any update that moves a branch that has stones.
+  Always allowed: `git stone <id> commit` and `commit-all`, making stones, tags, new branches, and branches without stones.
+  The message names the way out: commit the stones with Git Stone, or `git stone drop <id>` / `drop all`.
+- It stops accidents, not intent: anyone can run `git stone guard off`. The agent block in
+  [docs/ai-agents.md](docs/ai-agents.md) tells agents to leave it alone.
+- If you already have a `reference-transaction` hook, or `core.hooksPath` points to another folder (husky and similar),
+  Git Stone does not touch it. It prints the three lines to add yourself.
+- A detached HEAD is not guarded.
 
 ## What happens if I use normal Git?
 

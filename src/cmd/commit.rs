@@ -6,7 +6,9 @@
 
 use std::fs;
 
-use super::{find_stone, load_state, require_clean_start, short, sync_chain, CmdError, CmdResult};
+use super::{
+    find_stone, guard, load_state, require_clean_start, short, sync_chain, CmdError, CmdResult,
+};
 use crate::failpoint::failpoint;
 use crate::git::Git;
 use crate::repo::Repo;
@@ -128,6 +130,8 @@ pub fn run(repo: &Repo, id: u64, args: &[String]) -> CmdResult {
         args.extend(commit_args);
         let status = Git::new()
             .with_index(temp.path())
+            // Tells the guard hook (A17) that this commit is the stone's own.
+            .with_env(guard::ENV, "1")
             .allow_optional_locks()
             .run_inherit(args)?;
         if !status.success() {

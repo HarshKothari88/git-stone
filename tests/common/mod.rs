@@ -33,10 +33,24 @@ fn hermetic(cmd: &mut Command, home: &Path) {
         .env("GIT_COMMITTER_EMAIL", "test@example.com")
         .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .env("HOME", home)
+        // The guard hook calls `git-stone`, so the binary under test must be on PATH.
+        .env("PATH", path_with_binary())
         .env_remove("GIT_STONE_FAILPOINT")
         .env_remove("GIT_INDEX_FILE")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE");
+}
+
+fn path_with_binary() -> std::ffi::OsString {
+    let bin = Path::new(env!("CARGO_BIN_EXE_git-stone"))
+        .parent()
+        .expect("the binary has a folder")
+        .to_path_buf();
+    let mut paths = vec![bin];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    std::env::join_paths(paths).expect("PATH entries are valid")
 }
 
 pub struct Repo {

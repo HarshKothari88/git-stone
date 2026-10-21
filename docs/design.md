@@ -14,11 +14,12 @@ recipes see [internals.md](internals.md). For what normal Git commands do to sto
 6. [Commands](#commands)
 7. [Leaving paths out](#leaving-paths-out)
 8. [When the branch moves](#when-the-branch-moves)
-9. [Concurrency and crash safety](#concurrency-and-crash-safety)
-10. [Design decisions](#design-decisions)
-11. [Performance](#performance)
-12. [Limits](#limits)
-13. [Testing](#testing)
+9. [The guard](#the-guard)
+10. [Concurrency and crash safety](#concurrency-and-crash-safety)
+11. [Design decisions](#design-decisions)
+12. [Performance](#performance)
+13. [Limits](#limits)
+14. [Testing](#testing)
 
 ## Purpose
 
@@ -241,6 +242,26 @@ The old state stays in the ref's reflog. Any conflict changes nothing and names 
 Why this is right in every case: a commit of part of the work makes that part "already there" for the merge, so the stone
 shrinks to the rest; a rebase onto new upstream work gives the stones the upstream changes, so committing them never reverts
 upstream; a reset backwards keeps the stones' content on the older base. Only `repair` ever writes new trees (I2).
+
+## The guard
+
+Agents that make stones sometimes still run a plain `git commit`. That moves the branch under the stones (see above) and
+`repair` may then conflict, because the branch already holds a later version of the same lines. `git stone guard block`
+refuses that before it happens; `warn` only prints a warning; `off` removes it.
+
+- **Mechanism:** a `reference-transaction` hook asks `git-stone guard-check <phase>` before each ref update. Git runs this
+  hook also for `git commit --no-verify` (a `pre-commit` hook would be skipped), and a non-zero exit in the `prepared` phase
+  cancels the update. Verified on Git 2.56.
+- **What counts:** a move of `refs/heads/*` that has stones, with an old and a new value that differ. Creations, deletions,
+  no-op updates (`git reset` at the tip), tags and `refs/stones/*` are never blocked. Detached HEAD is not guarded.
+- **Git Stone's own commit** carries `GIT_STONE_COMMIT=1`, so `git stone <id> commit` and `commit-all` pass.
+- **Fails open:** the check answers 3 to mean "block" and the hook maps only 3 to exit 1. Any error, a missing `git-stone`,
+  or an older `git-stone` that does not know the command (it exits 1) allows the update.
+- **Setting:** `stone.guard` (`block` or `warn`) in the clone's `.git/config`. The hook goes in the normal hooks folder.
+  A hook that Git Stone did not write, and any `core.hooksPath` folder (often tracked by husky and similar), are never
+  touched; the three lines to add are printed instead.
+- **Limit:** it stops accidents, not intent. `git stone guard off` is always available, and the agent block tells agents to
+  leave it alone.
 
 ## Concurrency and crash safety
 

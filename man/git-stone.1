@@ -6,6 +6,7 @@ git-stone \- save task boundaries as you work, turn them into atomic commits lat
 \fBgit stone\fR <name> [\fB\-d\fR <text>] [\fB\-\-allow\-empty\fR] [\fB\-\-force\fR]
 \fBgit stone \-\-\fR <name>
 \fBgit stone\fR <name> \fB\-x\fR <pattern> [\fB\-\-remember\fR]
+\fBgit stone guard\fR [\fBblock\fR|\fBwarn\fR|\fBoff\fR]
 \fBgit stone exclude\fR [\fB\-\-remove\fR <pattern> | \fB\-\-clear\fR]
 \fBgit stone\fR [\fBstatus\fR] [\fB\-\-porcelain\fR]
 \fBgit stone list\fR [\fB\-\-porcelain\fR]
@@ -45,6 +46,13 @@ so the shell does not expand it. A tracked file that matches keeps its version f
 commit), so it counts as unchanged. An untracked file that matches is not in the stone. \fB\-x\fR can be repeated.
 \fB\-\-remember\fR also saves the patterns as \fIstone.exclude\fR in this repository's own Git config, so every
 later stone leaves them out too, on every branch. The rules are never pushed or cloned. Each stone prints what was left out.
+.TP
+\fBguard\fR [\fBblock\fR|\fBwarn\fR|\fBoff\fR]
+While a branch has stones, refuse (\fBblock\fR) or warn about (\fBwarn\fR) plain git commands that move it, so that
+agents must use \fBgit stone <id> commit\fR. It installs a \fIreference\-transaction\fR hook, which Git also runs for
+\fBcommit \-\-no\-verify\fR, and saves \fIstone.guard\fR in the repository's git config. Git Stone's own commits, new stones,
+tags and branches without stones are always allowed. A hook of your own, or a \fIcore.hooksPath\fR folder, is never touched; the
+three lines to add are printed instead. Without an argument it shows the current setting.
 .TP
 \fBexclude\fR [\fB\-\-remove\fR <pattern> | \fB\-\-clear\fR]
 Show the remembered patterns, remove one, or remove all. The next stone then includes those files again.

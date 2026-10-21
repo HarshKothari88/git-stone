@@ -21,6 +21,8 @@ Never, unless the human asks:
 - `git stone commit`, `commit-all`, `repair --apply`, `adopt`, `prune --apply`. Committing is the human's call.
 - `--force` or `--allow-empty` on a stone.
 - `--remember` or `git stone exclude --remove|--clear`. They change a rule for the whole repository, on every branch.
-- a plain `git commit` between stones (it moves the branch; stones then need `git stone repair`).
+- a plain `git commit` between stones (it moves the branch; stones then need `git stone repair`). If the Git Stone
+  guard refuses one, commit with `git stone <id> commit` instead, or ask the human.
+- `git stone guard warn|off`. The guard is the human's setting.
 If a command is refused (exit 1), read its message and tell the human. Do not work around it.
 Exit codes: 0 done, 1 refused with a reason, 2 failure (report it).

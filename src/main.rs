@@ -34,6 +34,7 @@ git stone - save task boundaries as you work, commit them later
   git stone adopt <branch | detached>
   git stone prune [--apply] [--chain <ref>]       list (or remove) chains of deleted branches and worktrees
   git stone agents                                print a block to paste into an AI agent's memory
+  git stone guard [block | warn | off]            while a branch has stones, refuse plain git commands that move it
   git stone setup --agent <claude|codex|both> [--global]   add that block to CLAUDE.md / AGENTS.md for you
   git stone setup --update                        refresh the block in files that already have it
   git stone help | version
@@ -58,6 +59,8 @@ const VERBS: &[&str] = &[
     "adopt",
     "prune",
     "exclude",
+    "guard",
+    "guard-check",
     "agents",
     "setup",
     "help",
@@ -78,6 +81,14 @@ pub enum ExcludeAction {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub enum GuardAction {
+    Show,
+    Block,
+    Warn,
+    Off,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 enum Command {
     Create {
         name: String,
@@ -91,6 +102,11 @@ enum Command {
         remember: bool,
     },
     Exclude(ExcludeAction),
+    Guard(GuardAction),
+    /// Called by the guard hook, not by people. `phase` is the hook's first argument.
+    GuardCheck {
+        phase: String,
+    },
     Status {
         porcelain: bool,
     },
@@ -204,6 +220,21 @@ fn parse(args: &[String]) -> Result<Command, String> {
         },
         "prune" => parse_prune(rest),
         "exclude" => parse_exclude(rest),
+        "guard" => match rest {
+            [] => Ok(Command::Guard(GuardAction::Show)),
+            [mode] if mode == "block" => Ok(Command::Guard(GuardAction::Block)),
+            [mode] if mode == "warn" => Ok(Command::Guard(GuardAction::Warn)),
+            [mode] if mode == "off" => Ok(Command::Guard(GuardAction::Off)),
+            _ => Err("guard takes nothing (show), `block`, `warn` or `off`.".into()),
+        },
+        "guard-check" => match rest {
+            [phase] => Ok(Command::GuardCheck {
+                phase: phase.clone(),
+            }),
+            _ => Err(
+                "guard-check is called by the guard hook, with the phase as its argument.".into(),
+            ),
+        },
         "agents" => no_args("agents", rest).map(|()| Command::Agents),
         "setup" => parse_setup(rest),
         "help" => no_args("help", rest).map(|()| Command::Help),
@@ -457,6 +488,7 @@ fn run() -> i32 {
         }
         Command::Setup { agent, global } => report(cmd::setup::run(agent, global)),
         Command::SetupUpdate => report(cmd::setup::update()),
+        Command::GuardCheck { phase } => cmd::guard::check(&phase),
         Command::Version => {
             println!("git-stone {}", env!("CARGO_PKG_VERSION"));
             0
@@ -501,6 +533,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
             *remember,
         ),
         Command::Exclude(action) => cmd::exclude::run(&repo, action),
+        Command::Guard(action) => cmd::guard::run(&repo, action),
         Command::Status { porcelain } => status::run(&repo, *porcelain),
         Command::List { porcelain } => list::run(&repo, *porcelain),
         Command::Review => review::run(&repo),
@@ -517,7 +550,8 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         | Command::Version
         | Command::Agents
         | Command::Setup { .. }
-        | Command::SetupUpdate => {
+        | Command::SetupUpdate
+        | Command::GuardCheck { .. } => {
             unreachable!("handled before dispatch")
         }
     }
@@ -834,6 +868,28 @@ mod tests {
         assert_eq!(p(&["drop", "2"]), Ok(Command::Drop { id: 2 }));
         assert!(p(&["drop", "all", "2"]).is_err());
         assert!(p(&["drop"]).is_err());
+    }
+
+    #[test]
+    fn guard_commands() {
+        assert_eq!(p(&["guard"]), Ok(Command::Guard(GuardAction::Show)));
+        assert_eq!(
+            p(&["guard", "block"]),
+            Ok(Command::Guard(GuardAction::Block))
+        );
+        assert_eq!(p(&["guard", "warn"]), Ok(Command::Guard(GuardAction::Warn)));
+        assert_eq!(p(&["guard", "off"]), Ok(Command::Guard(GuardAction::Off)));
+        assert!(p(&["guard", "maybe"]).is_err());
+        assert!(p(&["guard", "block", "off"]).is_err());
+        assert_eq!(
+            p(&["guard-check", "prepared"]),
+            Ok(Command::GuardCheck {
+                phase: "prepared".into()
+            })
+        );
+        assert!(p(&["guard-check"]).is_err());
+        // Both words are commands, so a stone with that name needs `--`.
+        assert!(p(&["--", "guard"]).is_ok());
     }
 
     #[test]
