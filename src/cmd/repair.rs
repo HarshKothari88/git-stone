@@ -55,7 +55,8 @@ pub fn run(repo: &Repo, apply: bool) -> CmdResult {
                 text.push_str(&format!("\n  {}", super::printable(path)));
             }
             text.push_str(&format!(
-                "\nNothing was changed. Your files are untouched.\nThe stones were made on commit {}; moving the branch back there makes them usable again.",
+                "\nNothing was changed. Your files are untouched.\nIf the branch already holds this work (for example it was committed with a plain `git commit`), remove the stone: `git stone drop {}`, or `git stone drop all`.\nOtherwise, moving the branch back to commit {} makes the stones usable again.",
+                stone.id,
                 state.anchor.as_deref().map_or("(no commits yet)", short)
             ));
             return Err(CmdError::user(text));

@@ -290,9 +290,10 @@ Measured on an Apple M5 laptop, macOS, Git 2.53.0, with 100 stones of 10 changed
   not captured (`status` warns); renames are not stored, diffs detect them.
 - **The `post-index-change` hook** can fire on the temporary index. Hooks that assume it is the real index should check
   `GIT_INDEX_FILE`.
-- **A conflicting repair leaves no way to keep that chain.** `drop` refuses on a moved branch, so a stone that cannot be
-  replayed cannot be dropped either. Move the branch back to the anchor (the stones are then usable again), or discard the
-  chain with `git update-ref -d refs/stones/heads/<branch>`.
+- **A conflicting repair cannot keep that chain, but it can be dropped.** Typically an agent kept editing after the stone and
+  then ran a plain `git commit`, so the branch already holds a later version of the same lines. `drop <id>` and `drop all`
+  work on a moved branch (they only delete records, never a file or a commit), and the conflict message says so. The other way
+  out is to move the branch back to the anchor, where the stones are usable again.
 - **A removed worktree's detached chain stays** under `refs/stones/detached/linked/<name>` until pruned.
 - **A conflicting `index.lock`** taken by another process in the instant between the lock check and the index update in
   `commit` leaves the commit made and the index behind; the error prints the exact `git read-tree -m -i <H0> HEAD` to finish,

@@ -14,7 +14,7 @@ you run `git stone repair`.
 | `git add`, `restore`, `restore --staged` | untouched | `status` recomputes the current changes |
 | `git stash`, `stash pop` | untouched | when stones exist, refuses a stone whose tree equals the branch commit |
 | `git commit` that equals the first stone | untouched | marks that stone as committed |
-| Any other `git commit`, `amend`, `reset`, `rebase`, `pull`, `merge`, `cherry-pick`, `am` | untouched | the branch *moved*: changes refused, reads warn, `repair` |
+| Any other `git commit`, `amend`, `reset`, `rebase`, `pull`, `merge`, `cherry-pick`, `am` | untouched | the branch *moved*: changes refused, reads warn, `repair`; `drop` and `drop all` still work |
 | Merge, rebase or cherry-pick in progress, conflicts | untouched | `create`, `commit`, `repair --apply` refuse; reads and `drop` work |
 | `git reset --hard`, `git clean` | untouched (your files are lost, the stones keep them) | restore from a stone |
 | `git switch other` and back | each branch keeps its own chain | never shows another branch's stones |

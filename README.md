@@ -193,7 +193,7 @@ Your unstoned changes now include all changes from the old Stone 2 boundary.
 | `git stone show <id>` | Header, description, stat and diff of one stone. |
 | `git stone <id> commit [options]` | Commit the first stone. Accepts `-m`, `-F`, `-e`, `--no-verify`, `-S`, `--author`, `--date`, `-s`. |
 | `git stone commit-all [--edit]` | Commit every stone in order, with the stone name as the message. |
-| `git stone <id> drop` | Remove a boundary. No file changes. |
+| `git stone <id> drop` / `git stone drop all` | Remove a boundary, or every boundary. No file changes. Works also after the branch moved. |
 | `git stone repair [--apply]` | After the branch moved: show (or do) the replay of the stones onto the new HEAD. |
 | `git stone adopt <branch\|detached>` | Move a chain to the branch you are on (after a rename, or after `git switch -c`). |
 | `git stone prune [--apply] [--chain <ref>]` | List (or remove) chains of deleted branches and removed worktrees. |
@@ -211,7 +211,7 @@ Stones live in refs, not in your working tree, so most Git commands do not affec
 |---|---|
 | `git add`, `restore`, `stash`, `reset --hard`, `clean` | Stones are untouched. After a `reset --hard`, bring work back with `git restore --source=refs/stones/heads/<branch>:trees/<id> --worktree -- .` |
 | Make the commit yourself that equals the first stone | Recognised. The stone is marked as committed. |
-| Any other commit, `pull`, `rebase`, `reset`, `amend`, `merge` | The branch moved. Commands that change stones refuse; reading still works. `git stone repair` puts the stones back on the new HEAD. |
+| Any other commit, `pull`, `rebase`, `reset`, `amend`, `merge` | The branch moved. Commands that change stones refuse; reading and `drop` still work. `git stone repair` puts the stones back on the new HEAD. If it conflicts because the branch already holds that work, `git stone drop <id>` or `git stone drop all` clears the stones. |
 | Merge or rebase in progress, or conflicts | `create`, `commit`, `repair --apply` refuse. Reading and `drop` work. |
 | `git switch other` and back | Every branch has its own stones. Nothing is lost. |
 | `git branch -m old new` | `git stone` warns; `git stone adopt old` moves the stones. |

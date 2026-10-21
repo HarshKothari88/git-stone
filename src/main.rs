@@ -28,6 +28,7 @@ git stone - save task boundaries as you work, commit them later
   git stone <id> commit [-m msg | -F file | -e | --no-verify | -S | --author | --date | -s]
                                                   also: git stone commit <id> ...
   git stone <id> drop                             also: git stone drop <id>
+  git stone drop all                              remove every boundary of this branch
   git stone commit-all [--edit]
   git stone repair [--apply]
   git stone adopt <branch | detached>
@@ -113,6 +114,7 @@ enum Command {
     Drop {
         id: u64,
     },
+    DropAll,
     CommitAll {
         edit: bool,
     },
@@ -179,9 +181,12 @@ fn parse(args: &[String]) -> Result<Command, String> {
                 args: passthrough.to_vec(),
             })
         }
-        "drop" => Ok(Command::Drop {
-            id: one_id("drop", rest)?,
-        }),
+        "drop" => match rest {
+            [all] if all == "all" => Ok(Command::DropAll),
+            _ => Ok(Command::Drop {
+                id: one_id("drop", rest)?,
+            }),
+        },
         "commit-all" => Ok(Command::CommitAll {
             edit: flag("commit-all", rest, "--edit")?,
         }),
@@ -502,6 +507,7 @@ fn dispatch(command: &Command) -> cmd::CmdResult {
         Command::Diff { target, args } => diff::run(&repo, target, args),
         Command::Show { id } => show::run(&repo, *id),
         Command::Drop { id } => drop::run(&repo, *id),
+        Command::DropAll => drop::run_all(&repo),
         Command::Commit { id, args } => commit::run(&repo, *id, args),
         Command::CommitAll { edit } => commit::run_all(&repo, *edit),
         Command::Repair { apply } => repair::run(&repo, *apply),
@@ -820,6 +826,14 @@ mod tests {
         assert_eq!(p(&["setup", "--update"]), Ok(Command::SetupUpdate));
         assert!(p(&["setup", "--update", "--global"]).is_err());
         assert!(p(&["setup", "--update", "--agent", "claude"]).is_err());
+    }
+
+    #[test]
+    fn drop_all() {
+        assert_eq!(p(&["drop", "all"]), Ok(Command::DropAll));
+        assert_eq!(p(&["drop", "2"]), Ok(Command::Drop { id: 2 }));
+        assert!(p(&["drop", "all", "2"]).is_err());
+        assert!(p(&["drop"]).is_err());
     }
 
     #[test]

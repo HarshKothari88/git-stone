@@ -29,6 +29,10 @@ fn list(r: &Repo) -> String {
     r.ok(&["list"])
 }
 
+fn list_text(r: &Repo) -> String {
+    r.stone(&["list"]).stdout
+}
+
 /// I3: the diff of every surviving stone starts at the previous survivor (or the anchor).
 fn assert_diffs_rebased(r: &Repo, ids: &[u64]) {
     let mut base = anchor_tree(r);
@@ -209,21 +213,42 @@ fn drop_works_during_a_merge_but_create_does_not() {
 }
 
 #[test]
-fn drop_is_refused_when_the_branch_moved() {
+fn drop_works_when_the_branch_moved() {
     let r = three();
     r.git(&["commit", "-q", "--allow-empty", "-m", "someone else"]);
     let before = r.fingerprint();
-    let state = r.git(&["rev-parse", "refs/stones/heads/main"]);
     let o = r.stone(&["drop", "2"]);
-    assert_eq!(o.code, 1);
-    assert!(
-        o.stderr.contains("moved since the stones were made")
-            && o.stderr.contains("Nothing was changed"),
-        "{}",
-        o.stderr
-    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stderr.contains("the branch moved"), "{}", o.stderr);
+    assert!(o.stdout.contains("No files were changed"), "{}", o.stdout);
+    // Only the record is gone: no file, no commit, no index change.
     r.assert_untouched(&before);
-    assert_eq!(r.git(&["rev-parse", "refs/stones/heads/main"]), state);
+    assert_eq!(list_text(&r), "  1  one\n  3  three\n");
+}
+
+#[test]
+fn drop_all_removes_every_boundary_and_keeps_the_ids_moving() {
+    let r = three();
+    let before = r.fingerprint();
+    let o = r.stone(&["drop", "all"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.contains("Dropped 3 stones."), "{}", o.stdout);
+    r.assert_untouched(&before);
+    assert_eq!(list_text(&r), "No stones yet.\n");
+    // The ids are never reused (I7).
+    assert!(r.ok(&["next"]).starts_with("Stone 4 created"));
+}
+
+#[test]
+fn drop_all_works_when_the_branch_moved_and_refuses_when_there_is_nothing() {
+    let r = three();
+    r.git(&["commit", "-q", "--allow-empty", "-m", "someone else"]);
+    let o = r.stone(&["drop", "all"]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(list_text(&r), "No stones yet.\n");
+    let again = r.stone(&["drop", "all"]);
+    assert_eq!(again.code, 1);
+    assert!(again.stderr.contains("nothing to drop"), "{}", again.stderr);
 }
 
 #[test]

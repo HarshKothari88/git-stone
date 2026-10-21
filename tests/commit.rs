@@ -682,7 +682,7 @@ fn other_movements_are_not_reconciled() {
     r.git(&["add", "other.txt"]);
     r.git(&["commit", "-q", "-m", "ordinary"]);
     let before = r.fingerprint();
-    for args in [vec!["x"], vec!["drop", "1"], vec!["1", "commit", "-m", "x"]] {
+    for args in [vec!["x"], vec!["1", "commit", "-m", "x"]] {
         let o = r.stone(&args);
         assert_eq!(o.code, 1, "{args:?}");
         assert!(

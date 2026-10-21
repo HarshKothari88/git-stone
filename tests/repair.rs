@@ -56,12 +56,7 @@ fn an_unrelated_commit_blocks_changes_until_repair_is_applied() {
 
     // Everything that changes things is refused.
     let before = r.fingerprint();
-    for args in [
-        &["three"][..],
-        &["1", "commit", "-m", "x"],
-        &["commit-all"],
-        &["2", "drop"],
-    ] {
+    for args in [&["three"][..], &["1", "commit", "-m", "x"], &["commit-all"]] {
         let o = r.stone(args);
         assert_eq!(o.code, 1, "{args:?}: {}", o.stderr);
         assert!(
@@ -313,6 +308,8 @@ fn a_conflicting_replay_changes_nothing_and_names_the_stone_and_paths() {
         assert!(o.stderr.contains("\n  base.txt"));
         assert!(!o.stderr.contains("a.txt"));
         assert!(o.stderr.contains("Nothing was changed."));
+        // The way out is named: the stone can be dropped even though the branch moved.
+        assert!(o.stderr.contains("`git stone drop 2`"), "{}", o.stderr);
         assert!(o.stdout.is_empty());
         r.assert_untouched(&before);
         assert_eq!(state_ref(&r), state);

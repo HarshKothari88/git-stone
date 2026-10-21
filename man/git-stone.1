@@ -15,6 +15,7 @@ git-stone \- save task boundaries as you work, turn them into atomic commits lat
 \fBgit stone\fR <id> \fBcommit\fR [\fB\-m\fR <msg> | \fB\-F\fR <file> | \fB\-e\fR | \fB\-\-no\-verify\fR | \fB\-S\fR | \fB\-\-author\fR | \fB\-\-date\fR | \fB\-s\fR]
 \fBgit stone commit\-all\fR [\fB\-\-edit\fR]
 \fBgit stone\fR <id> \fBdrop\fR
+\fBgit stone drop all\fR
 \fBgit stone repair\fR [\fB\-\-apply\fR]
 \fBgit stone adopt\fR <branch|detached>
 \fBgit stone prune\fR [\fB\-\-apply\fR] [\fB\-\-chain\fR <ref>]
@@ -64,8 +65,8 @@ Commit the first stone. Runs a real \fBgit commit\fR, so hooks, signing and the 
 \fBcommit\-all\fR [\fB\-\-edit\fR]
 Commit every stone in order, using the stone names as messages.
 .TP
-<id> \fBdrop\fR
-Remove a boundary. No files change.
+<id> \fBdrop\fR, \fBdrop all\fR
+Remove a boundary, or every boundary of this branch. No files change. Works also when the branch moved, so a chain that \fBrepair\fR cannot replay can be cleared.
 .TP
 \fBrepair\fR [\fB\-\-apply\fR]
 After the branch moved, replay the stones onto the new HEAD with Git's three\-way merge. Without \fB\-\-apply\fR it
